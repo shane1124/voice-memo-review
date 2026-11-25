@@ -389,7 +389,7 @@
     } else if (an === "codex-cli") {
       $("#cfgAnModel").placeholder = "留空使用本机 Codex 桌面版默认模型";
     } else if (an === "claude-cli") {
-      $("#cfgAnModel").placeholder = "留空使用本机 Claude 桌面版默认模型";
+      $("#cfgAnModel").placeholder = "留空使用后台 Claude CLI 的默认模型";
     }
     const warn = $("#comboWarning");
     if (tr === "antigravity-flash" && ["openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli"].includes(an)) {

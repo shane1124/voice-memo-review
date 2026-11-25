@@ -259,6 +259,13 @@ sys.exit(0)
             ok_conn, msg_conn = test_analyzer_connection(cfg, secrets)
             self.assertFalse(ok_conn)
             self.assertIn("尚未登录", msg_conn)
+            self.assertIn("MCP 接手", msg_conn)
+
+            with mock.patch("voice_review.analyzers.subprocess.run") as malformed:
+                malformed.return_value.stdout = "unrecognized status format"
+                ok_unknown, msg_unknown = test_analyzer_connection(cfg, secrets)
+            self.assertFalse(ok_unknown)
+            self.assertIn("未能核实", msg_unknown)
 
             rules = RuleStudio(cfg.rules_dir)
             rules.ensure_initialized()

@@ -12,7 +12,8 @@ description: 跨 AI 可插拔录音自动分析技能。用于处理本地录音
 - **优先量身定制模板**：内置的 4 套模板（通用对话复盘 / 会议讨论 / 客户拜访 / 个人复盘）只是参考示例；当用户同意时，可结合其口述或经授权扫描其常用工作目录/项目结构，为其量身生成专属复盘模板、个人背景（`persona.md`）与易错词表（`glossary.txt`），并通过 `vmr_save_template` 与 `vmr_update_profile` 仅保存在本机。
 - **温和版本提醒**：每次调用 `vmr_status` 若看到 `update_available == true`，在完成手头任务后顺口提醒一句：「顺便一提，`voice-memo-review` 发布了新版 `v<latest_version>`（`<release_notes>`），需要我帮你运行 `vmr update` 安全升级并自动重启吗？」（未获确认不擅自升级）。
 - **如实说明跨客户端体验与权限避坑**：
-  - 选用 **`codex-cli`（Codex 桌面版）** 或 **`claude-cli`（Claude 桌面版）** 后台分析时，程序会自动探测桌面 App 内置引擎（无需另装 CLI），默认每天一个对话窗口（如 `11-25-2026 录音分析`，也支持改每条独立/按周/单窗续聊），分析完成后会**直接自动弹开 Codex / Claude 桌面版对应对话窗**供用户直接阅读与追问，控制台任务列表也提供一键「在 Codex 打开 / 在 Claude 打开」按钮；
+  - **Claude 桌面接手（无需独立 CLI 登录）**：独立转写 + `analyzer_auto_provider = "none"`。在已登录的 Claude 桌面 **Code** 会话中，通过 MCP 手动分析待办，或安装 `voice-memo-desktop` 插件并主动运行 `/vmr-desktop-start` 自动接手。本机 App 和该会话要保持打开；此方式在当前会话出结果，不另开按日弹窗。
+  - **`codex-cli` / `claude-cli` 后台分析**：发现可执行程序不代表登录已就绪。`claude-cli` 独立调用 `claude -p`，不复用桌面登录；仅在用户选择此模式时才引导登录 CLI。分析成功后可弹开对应桌面对话，默认每天一个窗口；
   - 若开启苹果语音备忘录监听且 `vmr doctor` 报无读取权限，务必引导用户给 **`vmr doctor` 打印出的精确 `Python 真实路径`**（而非仅 `Python.app`）授予 macOS「完全磁盘访问权限」。
 
 ## 核心工作流原则

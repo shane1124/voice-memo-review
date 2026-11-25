@@ -1,0 +1,12 @@
+{
+  "name": "voice-memo-review",
+  "owner": { "name": "voice-memo-review contributors" },
+  "metadata": { "description": "Desktop integrations for voice-memo-review." },
+  "plugins": [
+    {
+      "name": "voice-memo-desktop",
+      "source": "./integrations/claude-desktop",
+      "description": "Opt-in handoff to an already signed-in Claude Desktop Code session."
+    }
+  ]
+}

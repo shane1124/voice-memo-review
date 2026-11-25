@@ -112,6 +112,10 @@ printf '# Codex 自动复盘\\n\\n模型：%s\\n收到字数：%s\\n' "${MODEL:-
                 root / "fake_claude.sh",
                 """#!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == auth && "${2:-}" == status ]]; then
+    printf '%s\\n' '{"loggedIn": true}'
+    exit 0
+fi
 STDIN_CONTENT="$(cat)"
 printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
 """,

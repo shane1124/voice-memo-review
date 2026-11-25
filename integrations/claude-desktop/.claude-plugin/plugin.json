@@ -1,0 +1,6 @@
+{
+  "name": "voice-memo-desktop",
+  "version": "0.1.0",
+  "author": { "name": "voice-memo-review contributors" },
+  "description": "Let an opted-in Claude Desktop Code session analyze VMR's locally transcribed queue."
+}

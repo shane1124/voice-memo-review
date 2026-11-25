@@ -82,7 +82,7 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
         ("FluidAudio (fluidaudiocli)", cfg.fluidaudio_bin is not None, str(cfg.fluidaudio_bin or "未找到（可设 preprocessor=none）")),
         ("Antigravity agentapi", cfg.agentapi_bin.is_file(), str(cfg.agentapi_bin)),
         ("Codex 桌面版 / CLI（免 Key 分析）", codex_exe is not None, codex_exe or cfg.codex_bin),
-        ("Claude 桌面版 / CLI（免 Key 分析）", claude_exe is not None, claude_exe or cfg.claude_bin),
+        ("Claude CLI（仅检查程序路径，不代表已登录）", claude_exe is not None, claude_exe or cfg.claude_bin),
         ("苹果语音备忘录读取权限", vm_ok, vm_detail),
         ("开机后台自启（launchd）", autostart_st.enabled, ("已开启" + (" · 运行托管中" if autostart_st.loaded else " · 下次开机生效")) if autostart_st.enabled else "未开启（可用 vmr autostart on 开启）"),
         ("插槽组合校验", ok_combo, f"{cfg.transcriber_provider} + {cfg.analyzer_auto_provider} ({combo_msg})"),

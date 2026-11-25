@@ -32,6 +32,11 @@ from voice_review.secrets import SecretStore
 from voice_review.state import StateStore
 
 DEFAULT_MAX_CHUNK_CHARS = 80_000
+CLAUDE_CLI_LOGIN_HINT = (
+    "VMR 后台的 Claude CLI 尚未登录；桌面版登录不会自动共享给它。"
+    "只想使用已登录的桌面版时，请选「仅自动转写」，在 Claude 桌面 Code 通过 MCP 接手。"
+    "仅当需要独立后台 CLI 分析时，才运行 `claude auth login`。"
+)
 
 
 @dataclass(frozen=True)
@@ -756,7 +761,7 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
                 low = text.lower()
                 if "not logged in" in low or "/login" in low:
                     raise RuntimeError(
-                        "本机 Claude 尚未登录：请打开 Claude 桌面版「Code」页签登录账号，或在终端运行 `claude /login` 后重试。"
+                        CLAUDE_CLI_LOGIN_HINT
                     )
                 if resume_session_id and not ephemeral:
                     return self._run_claude(
@@ -779,7 +784,7 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
                 detail = (proc.stderr or proc.stdout or "").strip()[-320:]
                 if "not logged in" in detail.lower() or "/login" in detail.lower():
                     raise RuntimeError(
-                        "本机 Claude 尚未登录：请打开 Claude 桌面版「Code」页签登录账号，或在终端运行 `claude /login` 后重试。"
+                        CLAUDE_CLI_LOGIN_HINT
                     )
                 raise RuntimeError(f"Claude 桌面版分析失败（exit={proc.returncode}）：{detail}")
             if not text:
@@ -928,24 +933,22 @@ def test_analyzer_connection(cfg: VoiceReviewConfig, secrets: SecretStore) -> tu
             return False, f"未检测到 Claude 桌面版或 Claude Code CLI：{cfg.claude_bin}"
         try:
             proc = subprocess.run(
-                [exe, "auth", "status"],
+                [exe, "auth", "status", "--json"],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 timeout=2.5,
                 check=False,
             )
-            raw_auth = (proc.stdout or "").strip()
-            if raw_auth.startswith("{"):
-                st = json.loads(raw_auth)
-                if isinstance(st, dict) and st.get("loggedIn") is False:
-                    return (
-                        False,
-                        f"已检测到 Claude 桌面版 / Claude Code CLI（{exe}），但尚未登录，请先在 Claude 桌面版登录或运行 `claude /login`",
-                    )
-        except Exception:
+            state = json.loads(proc.stdout or "")
+            if isinstance(state, dict):
+                if state.get("loggedIn") is False:
+                    return False, CLAUDE_CLI_LOGIN_HINT
+                if proc.returncode == 0 and state.get("loggedIn") is True:
+                    return True, f"VMR 后台 Claude Code CLI 已登录：{exe}"
+        except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
-        return True, f"本机 Claude 桌面版 / Claude Code CLI 可用（免 Key）：{exe}"
+        return False, "检测到 Claude CLI，但未能核实后台登录状态；发现桌面 App 不等于 CLI 已登录。"
     if pid == "openai-compatible-llm":
         base = str(cfg.analyzer_settings.get("base_url") or "https://api.openai.com/v1").rstrip("/")
         key = secrets.get("openai_llm_api_key", env_var="OPENAI_API_KEY")
