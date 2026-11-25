@@ -11,6 +11,7 @@ import sys
 import webbrowser
 
 from voice_review import __version__
+from voice_review.autostart import AutostartManager, run_restart_helper, spawn_restart_helper
 from voice_review.config import VoiceReviewConfig, load_config, validate_provider_combo
 from voice_review.daemon import (
     DaemonAlreadyRunningError,
@@ -37,6 +38,7 @@ def _setup_logging(verbose: bool = False) -> None:
 
 def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
     ok_combo, combo_msg = validate_provider_combo(cfg.transcriber_provider, cfg.analyzer_auto_provider)
+    autostart_st = AutostartManager.default(cfg.vmr_home).status()
     checks = [
         ("ffmpeg", shutil.which(cfg.ffmpeg_bin) is not None or Path(cfg.ffmpeg_bin).is_file(), cfg.ffmpeg_bin),
         ("ffprobe", shutil.which(cfg.ffprobe_bin) is not None or Path(cfg.ffprobe_bin).is_file(), cfg.ffprobe_bin),
@@ -45,6 +47,7 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
         ("Codex CLI（免 Key 分析）", shutil.which(cfg.codex_bin) is not None or Path(cfg.codex_bin).is_file(), cfg.codex_bin),
         ("Claude Code CLI（免 Key 分析）", shutil.which(cfg.claude_bin) is not None or Path(cfg.claude_bin).is_file(), cfg.claude_bin),
         ("苹果语音备忘录目录", cfg.recordings_dir.is_dir(), str(cfg.recordings_dir)),
+        ("开机后台自启（launchd）", autostart_st.enabled, ("已开启" + (" · 运行托管中" if autostart_st.loaded else " · 下次开机生效")) if autostart_st.enabled else "未开启（可用 vmr autostart on 开启）"),
         ("插槽组合校验", ok_combo, f"{cfg.transcriber_provider} + {cfg.analyzer_auto_provider} ({combo_msg})"),
     ]
     all_ok = True
@@ -197,13 +200,45 @@ def _cmd_install(targets: list[str] | None, uninstall: bool) -> int:
     return 0 if all_ok else 1
 
 
-def _cmd_update(cfg: VoiceReviewConfig, check_only: bool, archive: str | None, sha256: str) -> int:
+def _cmd_autostart(cfg: VoiceReviewConfig, action: str) -> int:
+    mgr = AutostartManager.default(cfg.vmr_home)
+    if action == "status":
+        st = mgr.status()
+        if not st.supported:
+            print("⚠️ 开机自启目前仅支持 macOS（launchd）。")
+            return 0
+        if st.enabled:
+            state_txt = "已开启且正在由 launchd 后台托管" if st.loaded else "已写入配置（待加载或下次开机生效）"
+            print(f"✅ 开机后台自启：{state_txt}\n   - 配置文件：{st.plist_path}")
+        else:
+            print("ℹ️  开机后台自启：未开启。运行 `vmr autostart on` 即可开启。")
+        return 0
+    if action == "on":
+        running = discover_running_daemon(cfg.vmr_home)
+        if running is not None:
+            # 保留既有控制台令牌，无缝交给 launchd 接管
+            from voice_review.autostart import write_restart_token
+            write_restart_token(cfg.vmr_home, running.token)
+            ok, msg = mgr.enable(load_now=True, stop_existing_pid=running.pid)
+        else:
+            ok, msg = mgr.enable(load_now=True)
+        print(("✅ " if ok else "❌ ") + msg)
+        return 0 if ok else 1
+    if action == "off":
+        ok, msg = mgr.disable(unload_now=True)
+        print(("✅ " if ok else "❌ ") + msg)
+        return 0 if ok else 1
+    print(f"❌ 未知动作：{action}")
+    return 1
+
+
+def _cmd_update(cfg: VoiceReviewConfig, check_only: bool, archive: str | None, sha256: str, force: bool = False) -> int:
     upd = SelfUpdater.default(cfg)
     if archive:
         res = upd.apply_update(archive, expected_sha256=sha256)
         print(("✅ " if res.ok else "❌ ") + res.message)
         return 0 if res.ok else 1
-    info = upd.check_latest()
+    info = upd.check_latest(use_cache=False)
     if not info.ok:
         print(f"❌ {info.error}")
         return 1
@@ -211,14 +246,39 @@ def _cmd_update(cfg: VoiceReviewConfig, check_only: bool, archive: str | None, s
         print(f"✅ 当前已是最新版本 v{info.current_version}（发布源：{cfg.update_repo}）。")
         return 0
     print(f"✨ 发现新版本 v{info.latest_version}（当前 v{info.current_version}）：{info.release_url}")
+    if info.release_notes:
+        print(f"   更新亮点：{info.release_notes}")
     if check_only:
         return 0
     if not info.download_url:
         print("⚠️ 最新 Release 未附带 macOS 离线压缩包资产。")
         return 1
+
+    from voice_review.state import StateStore
+    st_store = StateStore(cfg.state_db)
+    active = [r for r in st_store.list_recent(limit=50) if r.status in ("preparing", "transcribing", "analyzing")]
+    if active and not force:
+        print(f"⚠️ 当前有 {len(active)} 条录音正在后台处理中，为避免中断已暂停升级；请等待完成或加 --force 强制升级。")
+        return 1
+
     res = upd.apply_update(info.download_url, expected_sha256=info.sha256)
     print(("✅ " if res.ok else "❌ ") + res.message)
-    return 0 if res.ok else 1
+    if not res.ok:
+        return 1
+
+    # 如本机已有守护进程在运行，自动安全热重启并保留会话令牌
+    running = discover_running_daemon(cfg.vmr_home)
+    mgr = AutostartManager.default(cfg.vmr_home)
+    if running is not None:
+        spawn_restart_helper(
+            vmr_bin=mgr.vmr_bin,
+            vmr_home=cfg.vmr_home,
+            old_pid=running.pid,
+            token=running.token,
+            use_launchd=mgr.status().enabled,
+        )
+        print("🔄 已触发后台单守护自动热重启，控制台刷新后即切换到新版本。")
+    return 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -258,6 +318,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_upd.add_argument("--check", action="store_true", help="仅检查是否有新版本")
     p_upd.add_argument("--archive", default=None, help="使用本地离线更新包路径更新")
     p_upd.add_argument("--sha256", default="", help="配合 --archive 的 SHA256 校验值")
+    p_upd.add_argument("--force", action="store_true", help="即使有任务正在处理中也强制更新")
+
+    p_auto = sub.add_parser("autostart", help="管理 macOS 开机后台自启（launchd LaunchAgent）")
+    p_auto.add_argument("action", nargs="?", default="status", choices=("on", "off", "status"), help="on 开启 / off 关闭 / status 查看状态")
 
     p_enroll = sub.add_parser("enroll", help="从 10~30 秒清晰单人样音注册声纹")
     p_enroll.add_argument("name", help="说话人名称")
@@ -276,6 +340,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_wone = sub.add_parser("_worker-one", help=argparse.SUPPRESS)
     p_wone.add_argument("recording_id")
     p_wone.add_argument("--no-analyze", action="store_true")
+
+    # 供热更新与自启切换使用的内部重启接力器
+    p_rst = sub.add_parser("_restart-helper", help=argparse.SUPPRESS)
+    p_rst.add_argument("--old-pid", type=int, default=0)
+    p_rst.add_argument("--use-launchd", action="store_true")
 
     return parser
 
@@ -317,7 +386,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "uninstall":
         return _cmd_install(args.target, uninstall=True)
     if args.cmd == "update":
-        return _cmd_update(cfg, args.check, args.archive, args.sha256)
+        return _cmd_update(cfg, args.check, args.archive, args.sha256, force=args.force)
+    if args.cmd == "autostart":
+        return _cmd_autostart(cfg, args.action)
+    if args.cmd == "_restart-helper":
+        mgr = AutostartManager.default(cfg.vmr_home)
+        return run_restart_helper(
+            vmr_bin=mgr.vmr_bin,
+            vmr_home=cfg.vmr_home,
+            old_pid=args.old_pid,
+            use_launchd=args.use_launchd,
+        )
     if args.cmd == "_worker-one":
         executor = PipelineExecutor(cfg)
         rec = executor.store.get(args.recording_id)

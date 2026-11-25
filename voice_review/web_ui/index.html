@@ -17,7 +17,7 @@
           </svg>
         </span>
         <span class="brand-name">语音复盘</span>
-        <span class="brand-ver" id="appVersion">v1.1.0</span>
+        <span class="brand-ver" id="appVersion">v1.2.0</span>
       </div>
 
       <nav class="nav" aria-label="主导航">
@@ -54,6 +54,16 @@
       <div id="tokenBanner" class="banner" hidden>
         当前页面未携带本地会话令牌，请从终端重新运行 <code>vmr ui</code> 或双击 <code>启动控制台.command</code> 打开。
       </div>
+      <div id="updateBanner" class="update-banner" hidden>
+        <div class="update-banner-text">
+          <span class="update-banner-title" id="updateBannerTitle">发现新版本</span>
+          <span class="update-banner-notes" id="updateBannerNotes"></span>
+        </div>
+        <div class="btn-group">
+          <button class="btn primary compact-btn" id="bannerApplyUpdateBtn" type="button">一键更新并重启</button>
+          <button class="btn text-btn" id="bannerDismissUpdateBtn" type="button">稍后</button>
+        </div>
+      </div>
 
       <!-- 视图 1：工作台 -->
       <section class="view active" id="view-workbench">
@@ -83,7 +93,7 @@
 
           <!-- 极简监听开关行 -->
           <div class="watch-strip">
-            <span class="watch-strip-label">后台自动监听</span>
+            <span class="watch-strip-label">后台运行</span>
             <div class="watch-switches">
               <label class="switch-pill">
                 <input type="checkbox" id="toggleVoiceMemos" />
@@ -92,6 +102,10 @@
               <label class="switch-pill">
                 <input type="checkbox" id="toggleDropFolder" />
                 <span>自定义投放文件夹</span>
+              </label>
+              <label class="switch-pill" id="autostartPill">
+                <input type="checkbox" id="toggleAutostart" />
+                <span>开机后台自启</span>
               </label>
             </div>
           </div>
@@ -290,6 +304,9 @@
                   <span>提示词正文（发给 AI 的明文规则）</span>
                   <textarea id="tplBody" rows="14" spellcheck="false"></textarea>
                 </label>
+                <div class="inline-note" id="tplBuiltinDiffHint" hidden>
+                  当前正文与本版本内置模板有差异（如为版本升级带来的新版模板，可点击下方「恢复默认」同步最新内置版，你的自定义不会被自动覆盖）。
+                </div>
                 <div class="editor-actions">
                   <label class="switch-pill">
                     <input type="checkbox" id="tplDefault" />
@@ -365,12 +382,12 @@
               <div class="group-title">版本更新</div>
               <div class="btn-group">
                 <button class="btn subtle" id="checkUpdateBtn" type="button">检查新版本</button>
-                <button class="btn primary" id="applyUpdateBtn" type="button" hidden>立即更新</button>
+                <button class="btn primary" id="applyUpdateBtn" type="button" hidden>一键更新并重启</button>
               </div>
             </div>
             <div class="settings-card">
               <div class="setting-row update-row" id="updateStatus">
-                当前运行版本 <strong id="updateCurrentVer">v1.1.0</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>
+                当前运行版本 <strong id="updateCurrentVer">v1.2.0</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>（守护每 24 小时静默检查一次）
               </div>
             </div>
           </div>

@@ -55,6 +55,7 @@ class PromptTemplate:
     is_default: bool
     is_builtin: bool
     path: Path
+    differs_from_builtin: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -64,6 +65,7 @@ class PromptTemplate:
             "body": self.body,
             "is_default": self.is_default,
             "is_builtin": self.is_builtin,
+            "differs_from_builtin": self.differs_from_builtin,
             "path": str(self.path),
         }
 
@@ -145,7 +147,15 @@ class RuleStudio:
         meta, body = _parse_template_markdown(path.read_text(encoding="utf-8"), fallback_id=tid)
         resolved_id = meta.get("id") or tid
         is_default = meta.get("default", "").lower() in ("true", "1", "yes")
-        is_builtin = (self.builtin_templates_dir / f"{resolved_id}.md").is_file()
+        builtin_file = self.builtin_templates_dir / f"{resolved_id}.md"
+        is_builtin = builtin_file.is_file()
+        differs = False
+        if is_builtin:
+            try:
+                _, builtin_body = _parse_template_markdown(builtin_file.read_text(encoding="utf-8"), fallback_id=resolved_id)
+                differs = body.strip() != builtin_body.strip()
+            except OSError:
+                differs = False
         return PromptTemplate(
             id=resolved_id,
             name=meta.get("name") or resolved_id,
@@ -154,6 +164,7 @@ class RuleStudio:
             is_default=is_default,
             is_builtin=is_builtin,
             path=path,
+            differs_from_builtin=differs,
         )
 
     def list_templates(self) -> list[PromptTemplate]:

@@ -10,6 +10,7 @@ from typing import Any, TextIO
 import urllib.request
 
 from voice_review import __version__
+from voice_review.autostart import AutostartManager, write_restart_token
 from voice_review.config import (
     VoiceReviewConfig,
     config_to_dict,
@@ -144,7 +145,7 @@ def _tool_defs() -> list[dict[str, Any]]:
         },
         {
             "name": "vmr_update_settings",
-            "description": "更新四插槽非敏感配置（转写引擎、后台自动分析引擎如 codex-cli/claude-cli/antigravity-agentapi/none、以及苹果语音备忘录/投放文件夹监听开关），保存后自动通知本机守护进程热重载。不含 API Key。",
+            "description": "更新四插槽非敏感配置（转写引擎、后台自动分析引擎如 codex-cli/claude-cli/antigravity-agentapi/none、监听源开关及 macOS 开机后台自启），保存后自动通知本机守护热重载。不含 API Key。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -159,6 +160,17 @@ def _tool_defs() -> list[dict[str, Any]]:
                     "voice_memos_enabled": {"type": "boolean"},
                     "drop_folder_enabled": {"type": "boolean"},
                     "drop_folder_dir": {"type": "string"},
+                    "autostart_enabled": {"type": "boolean", "description": "可选：开启或关闭 macOS 开机后台自启（launchd）"},
+                },
+            },
+        },
+        {
+            "name": "vmr_check_update",
+            "description": "检查 voice-memo-review 是否有新的 GitHub Release 版本与更新亮点（默认优先读 24 小时本地缓存，传 force_refresh=true 可实时检查）。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "force_refresh": {"type": "boolean", "default": False},
                 },
             },
         },
@@ -205,6 +217,9 @@ class McpStdioServer:
 
     def _call_tool(self, name: str, args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
         if name == "vmr_status":
+            auto_st = AutostartManager.default(self.cfg.vmr_home).status()
+            from voice_review.updater import SelfUpdater
+            cached_upd = SelfUpdater.default(self.cfg).read_cached_update()
             return {
                 "version": __version__,
                 "vmr_home": str(self.cfg.vmr_home),
@@ -213,6 +228,8 @@ class McpStdioServer:
                 "analyzer_auto_provider": self.cfg.analyzer_auto_provider,
                 "voice_memos_enabled": self.cfg.voice_memos_enabled,
                 "drop_folder_enabled": self.cfg.drop_folder_enabled,
+                "autostart_supported": auto_st.supported,
+                "autostart_enabled": auto_st.enabled,
                 "default_template": self.rules.get_template().id,
                 "persona_configured": bool(self.rules.get_persona()),
                 "glossary_configured": bool(self.rules.get_glossary()),
@@ -220,8 +237,18 @@ class McpStdioServer:
                 "agentapi_ready": self.cfg.agentapi_bin.is_file(),
                 "codex_ready": bool(shutil.which(self.cfg.codex_bin) or Path(self.cfg.codex_bin).is_file()),
                 "claude_ready": bool(shutil.which(self.cfg.claude_bin) or Path(self.cfg.claude_bin).is_file()),
+                "update_available": bool(cached_upd and cached_upd.has_update),
+                "latest_version": cached_upd.latest_version if cached_upd else __version__,
+                "release_notes": cached_upd.release_notes if cached_upd else "",
                 "recent_count": len(self.store.list_recent(limit=50)),
             }, False
+
+        if name == "vmr_check_update":
+            from voice_review.updater import SelfUpdater
+            upd = SelfUpdater.default(self.cfg)
+            force_refresh = bool(args.get("force_refresh", False))
+            info = upd.check_latest(use_cache=not force_refresh)
+            return info.to_dict(), (not info.ok)
 
         if name == "vmr_get_profile":
             return {
@@ -332,6 +359,28 @@ class McpStdioServer:
                 except Exception:
                     daemon_reloaded = False
 
+            autostart_note = ""
+            if "autostart_enabled" in args and args["autostart_enabled"] is not None:
+                want_auto = bool(args["autostart_enabled"])
+                mgr = AutostartManager.default(self.cfg.vmr_home)
+                if info is not None:
+                    try:
+                        req_a = urllib.request.Request(
+                            f"{info.base_url}/api/v1/autostart",
+                            data=json.dumps({"enabled": want_auto}).encode("utf-8"),
+                            headers={"Content-Type": "application/json", "X-VMR-Token": info.token},
+                            method="PUT",
+                        )
+                        with urllib.request.urlopen(req_a, timeout=5.0) as resp_a:
+                            autostart_note = json.loads(resp_a.read().decode("utf-8")).get("message", "")
+                    except Exception as exc:
+                        autostart_note = f"通过守护切换自启失败：{exc}"
+                else:
+                    if want_auto:
+                        _, autostart_note = mgr.enable(load_now=True)
+                    else:
+                        _, autostart_note = mgr.disable(unload_now=True)
+
             return {
                 "ok": True,
                 "config_path": str(cfg_target),
@@ -339,6 +388,8 @@ class McpStdioServer:
                 "analyzer_auto_provider": self.cfg.analyzer_auto_provider,
                 "voice_memos_enabled": self.cfg.voice_memos_enabled,
                 "drop_folder_enabled": self.cfg.drop_folder_enabled,
+                "autostart_enabled": AutostartManager.default(self.cfg.vmr_home).status().enabled,
+                "autostart_message": autostart_note,
                 "daemon_reloaded": daemon_reloaded,
             }, False
 

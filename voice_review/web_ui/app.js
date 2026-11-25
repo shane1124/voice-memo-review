@@ -178,6 +178,7 @@
     }
     try {
       const st = await apiFetch("/api/v1/status");
+      state.daemonPid = st.pid;
       $("#tokenBanner").hidden = true;
       $("#appVersion").textContent = `v${st.version}`;
       $("#updateCurrentVer").textContent = `v${st.version}`;
@@ -186,6 +187,14 @@
       $("#engineMini").textContent = `${st.transcriber_provider} → ${st.analyzer_auto_provider}`;
       $("#toggleVoiceMemos").checked = Boolean(st.voice_memos_enabled);
       $("#toggleDropFolder").checked = Boolean(st.drop_folder_enabled);
+      const autoPill = $("#autostartPill");
+      if (autoPill) {
+        autoPill.hidden = !st.autostart_supported;
+        $("#toggleAutostart").checked = Boolean(st.autostart_enabled);
+      }
+      if (st.update_available && !state.updateBannerDismissed) {
+        showUpdateBanner(st.latest_version, st.release_notes || "");
+      }
     } catch (err) {
       $("#daemonDot").className = "status-dot error";
       $("#daemonLabel").textContent = "守护未连接或令牌失效";
@@ -305,6 +314,21 @@
   }
   $("#toggleVoiceMemos").addEventListener("change", updateSourceToggle);
   $("#toggleDropFolder").addEventListener("change", updateSourceToggle);
+  $("#toggleAutostart").addEventListener("change", async () => {
+    const want = $("#toggleAutostart").checked;
+    const prevPid = state.daemonPid;
+    try {
+      const res = await apiFetch("/api/v1/autostart", { method: "PUT", body: { enabled: want } });
+      showToast(res.message || (want ? "已开启开机自启" : "已关闭开机自启"));
+      if (res.restarting) {
+        await waitForDaemonReconnect(prevPid, false);
+      }
+      await loadStatus();
+    } catch (e) {
+      $("#toggleAutostart").checked = !want;
+      showToast(e.message, true);
+    }
+  });
   $("#refreshJobsBtn").addEventListener("click", () => loadJobs().catch((e) => showToast(e.message, true)));
 
   // 引擎插槽配置
@@ -485,6 +509,8 @@
     $("#tplBody").value = tpl ? tpl.body : "";
     $("#tplDefault").checked = Boolean(tpl && tpl.is_default);
     $("#resetTemplateBtn").hidden = !(tpl && tpl.is_builtin);
+    const diffHint = $("#tplBuiltinDiffHint");
+    if (diffHint) diffHint.hidden = !(tpl && tpl.is_builtin && tpl.differs_from_builtin);
     renderTemplateList();
   }
 
@@ -774,6 +800,54 @@
     } catch (e) { showToast(e.message, true); }
   });
 
+  function showUpdateBanner(latestVer, notes) {
+    if (!latestVer) return;
+    $("#updateBannerTitle").textContent = `发现新版本 v${latestVer}`;
+    $("#updateBannerNotes").textContent = notes || "包含最新功能优化与问题修复，点击即可安全校验升级并自动重启。";
+    $("#updateBanner").hidden = false;
+  }
+
+  async function waitForDaemonReconnect(prevPid, reloadPage) {
+    const deadline = Date.now() + 25000;
+    await new Promise((r) => setTimeout(r, 800));
+    while (Date.now() < deadline) {
+      try {
+        const resp = await fetch("/api/v1/health", { cache: "no-store" });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.ok && (!prevPid || data.pid !== prevPid)) {
+            if (reloadPage) {
+              showToast(`已重启至 v${data.version}，正在刷新页面…`);
+              setTimeout(() => window.location.reload(), 500);
+            }
+            return true;
+          }
+        }
+      } catch (_) {}
+      await new Promise((r) => setTimeout(r, 600));
+    }
+    return false;
+  }
+
+  async function performUpdateAndRestart() {
+    const prevPid = state.daemonPid;
+    try {
+      showToast("正在校验 SHA256 并安全更新…");
+      const res = await apiFetch("/api/v1/update/apply", { method: "POST", body: { auto_restart: true } });
+      showToast(res.message || "更新成功，正在自动重启…");
+      if (res.restarting) {
+        const ok = await waitForDaemonReconnect(prevPid, true);
+        if (!ok) showToast("更新已写入磁盘，请手动刷新页面或重新运行 vmr ui");
+      }
+    } catch (e) { showToast(e.message, true); }
+  }
+
+  $("#bannerDismissUpdateBtn").addEventListener("click", () => {
+    state.updateBannerDismissed = true;
+    $("#updateBanner").hidden = true;
+  });
+  $("#bannerApplyUpdateBtn").addEventListener("click", performUpdateAndRestart);
+
   $("#checkUpdateBtn").addEventListener("click", async () => {
     try {
       const info = await apiFetch("/api/v1/update/check");
@@ -784,29 +858,35 @@
         return;
       }
       if (info.has_update) {
-        box.innerHTML = `发现新版本 <strong>v${escapeHtml(info.latest_version)}</strong>（当前 v${escapeHtml(info.current_version)}），点击「立即更新」即可安全升级。`;
+        const notesHtml = info.release_notes ? ` · ${escapeHtml(info.release_notes)}` : "";
+        box.innerHTML = `发现新版本 <strong>v${escapeHtml(info.latest_version)}</strong>（当前 v${escapeHtml(info.current_version)}）${notesHtml}`;
         $("#applyUpdateBtn").hidden = false;
+        state.updateBannerDismissed = false;
+        showUpdateBanner(info.latest_version, info.release_notes || "");
       } else {
         box.innerHTML = `当前已是最新版本 <strong>v${escapeHtml(info.current_version)}</strong>。`;
         $("#applyUpdateBtn").hidden = true;
+        $("#updateBanner").hidden = true;
       }
     } catch (e) { showToast(e.message, true); }
   });
 
-  $("#applyUpdateBtn").addEventListener("click", async () => {
-    try {
-      showToast("正在校验 SHA256 并安全更新…");
-      const res = await apiFetch("/api/v1/update/apply", { method: "POST", body: {} });
-      showToast(res.message || "更新成功，请重启控制台");
-    } catch (e) { showToast(e.message, true); }
-  });
+  $("#applyUpdateBtn").addEventListener("click", performUpdateAndRestart);
 
-  // SSE 实时进度订阅
+  // SSE 实时进度与静默更新订阅
   function connectEvents() {
     if (!TOKEN) return;
     const es = new EventSource(`/api/v1/events?token=${encodeURIComponent(TOKEN)}`);
     es.addEventListener("job", () => loadJobs().catch(() => {}));
     es.addEventListener("progress", () => loadJobs().catch(() => {}));
+    es.addEventListener("update", (ev) => {
+      try {
+        const info = JSON.parse(ev.data || "{}");
+        if (info.has_update && !state.updateBannerDismissed) {
+          showUpdateBanner(info.latest_version, info.release_notes || "");
+        }
+      } catch (_) {}
+    });
     es.onerror = () => {
       es.close();
       setTimeout(connectEvents, 4000);

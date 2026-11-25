@@ -31,6 +31,7 @@ from voice_review.analyzers import (
     get_analyzer,
     test_analyzer_connection,
 )
+from voice_review.autostart import AutostartManager, consume_restart_token, spawn_restart_helper
 from voice_review.config import (
     VoiceReviewConfig,
     config_to_dict,
@@ -415,8 +416,9 @@ class VmrDaemon:
         self.host = "127.0.0.1"
         self._requested_port = cfg.ui_port if port is None else int(port)
         self.port = 0
-        self.token = py_secrets.token_urlsafe(24)
+        self.token = consume_restart_token(cfg.vmr_home) or py_secrets.token_urlsafe(24)
         self._start_watcher = start_watcher
+        self._autostart = AutostartManager.default(cfg.vmr_home)
 
         self.broadcaster = EventBroadcaster()
         self.store = StateStore(cfg.state_db)
@@ -443,6 +445,58 @@ class VmrDaemon:
         self._httpd: ThreadingHTTPServer | None = None
         self._http_thread: threading.Thread | None = None
         self._worker_thread: threading.Thread | None = None
+        self._update_thread: threading.Thread | None = None
+
+    def active_jobs_count(self) -> int:
+        recs = self.store.list_recent(limit=50)
+        return sum(1 for r in recs if r.status in ("preparing", "transcribing", "analyzing"))
+
+    def schedule_graceful_restart(self, *, use_launchd: bool, disable_launchd_before_exit: bool = False) -> None:
+        """延迟 0.35s 待 HTTP 响应发回浏览器后，启动脱离接力进程并优雅关闭当前守护。"""
+        def _do() -> None:
+            time.sleep(0.35)
+            try:
+                if disable_launchd_before_exit:
+                    # 先准备接力进程，再移除 launchd 注册并退出，确保控制台不断联
+                    spawn_restart_helper(
+                        vmr_bin=self._autostart.vmr_bin,
+                        vmr_home=self.cfg.vmr_home,
+                        old_pid=os.getpid(),
+                        token=self.token,
+                        use_launchd=False,
+                    )
+                    self._autostart.disable(unload_now=True)
+                else:
+                    spawn_restart_helper(
+                        vmr_bin=self._autostart.vmr_bin,
+                        vmr_home=self.cfg.vmr_home,
+                        old_pid=os.getpid(),
+                        token=self.token,
+                        use_launchd=use_launchd,
+                    )
+            except Exception as exc:
+                logger.warning("触发热重启接力异常：%s", exc)
+            finally:
+                self._stop_event.set()
+                self.wake_worker()
+
+        threading.Thread(target=_do, daemon=True, name="vmr-restart-trigger").start()
+
+    def _update_check_loop(self) -> None:
+        """方案 B：启动 15 秒后静默检查一次（可被 stop 中断），随后每 24 小时检查一次，零干扰不撞限流。"""
+        if self._stop_event.wait(timeout=15.0):
+            return
+        while not self._stop_event.is_set():
+            try:
+                from voice_review.updater import SelfUpdater
+                upd = SelfUpdater.default(self.cfg)
+                info = upd.check_latest(use_cache=True)
+                if info.ok and info.has_update:
+                    self.broadcaster.publish("update", info.to_dict())
+            except Exception:
+                pass
+            if self._stop_event.wait(timeout=86400.0):
+                break
 
     def _build_scanner(self, cfg: VoiceReviewConfig) -> MultiSourceScanner:
         since_dt = datetime.fromisoformat(cfg.import_since)
@@ -759,6 +813,9 @@ class VmrDaemon:
 
                 if path == "/api/v1/status":
                     cfg = daemon.cfg
+                    autostart_st = daemon._autostart.status()
+                    from voice_review.updater import SelfUpdater
+                    cached_upd = SelfUpdater.default(cfg).read_cached_update()
                     self._send_json(
                         200,
                         {
@@ -769,6 +826,10 @@ class VmrDaemon:
                             "voice_memos_enabled": cfg.voice_memos_enabled,
                             "drop_folder_enabled": cfg.drop_folder_enabled,
                             "drop_folder_dir": str(cfg.drop_folder_dir),
+                            "autostart_supported": autostart_st.supported,
+                            "autostart_enabled": autostart_st.enabled,
+                            "autostart_loaded": autostart_st.loaded,
+                            "active_jobs": daemon.active_jobs_count(),
                             "preprocessor_mode": cfg.preprocessor_mode,
                             "transcriber_provider": cfg.transcriber_provider,
                             "analyzer_auto_provider": cfg.analyzer_auto_provider,
@@ -777,8 +838,16 @@ class VmrDaemon:
                             "agentapi_ready": cfg.agentapi_bin.is_file(),
                             "codex_ready": bool(shutil.which(cfg.codex_bin) or Path(cfg.codex_bin).is_file()),
                             "claude_ready": bool(shutil.which(cfg.claude_bin) or Path(cfg.claude_bin).is_file()),
+                            "update_available": bool(cached_upd and cached_upd.has_update),
+                            "latest_version": cached_upd.latest_version if cached_upd else __version__,
+                            "release_notes": cached_upd.release_notes if cached_upd else "",
+                            "release_url": cached_upd.release_url if cached_upd else "",
                         },
                     )
+                    return
+
+                if path == "/api/v1/autostart":
+                    self._send_json(200, daemon._autostart.status().to_dict())
                     return
 
                 if path == "/api/v1/config":
@@ -845,7 +914,8 @@ class VmrDaemon:
                     try:
                         from voice_review.updater import SelfUpdater
                         upd = SelfUpdater.default(daemon.cfg)
-                        info = upd.check_latest()
+                        use_cache = (qs.get("cached") or ["0"])[0] in ("1", "true", "yes")
+                        info = upd.check_latest(use_cache=use_cache)
                         self._send_json(200, info.to_dict())
                     except Exception as exc:
                         self._send_json(200, {"ok": False, "current_version": __version__, "error": str(exc)})
@@ -900,6 +970,46 @@ class VmrDaemon:
                         daemon.rules.save_persona(str(body.get("persona") or ""))
                     self._send_json(200, {"ok": True})
                     return
+
+                if path == "/api/v1/autostart":
+                    want = bool(body.get("enabled", False))
+                    st_before = daemon._autostart.status()
+                    if not st_before.supported:
+                        self._send_json(400, {"ok": False, "error": "开机自启目前仅支持 macOS（launchd）"})
+                        return
+                    if want:
+                        daemon._autostart.write_plist()
+                        if not st_before.loaded:
+                            # 交由 launchd 接管并沿用当前会话令牌
+                            daemon.schedule_graceful_restart(use_launchd=True)
+                            self._send_json(
+                                200,
+                                {
+                                    "ok": True,
+                                    "enabled": True,
+                                    "restarting": True,
+                                    "message": "已开启开机自启，正在交由 macOS 后台接管…",
+                                },
+                            )
+                            return
+                        self._send_json(200, {"ok": True, "enabled": True, "restarting": False, "message": "开机自启已启用"})
+                        return
+                    else:
+                        if st_before.loaded:
+                            daemon.schedule_graceful_restart(use_launchd=False, disable_launchd_before_exit=True)
+                            self._send_json(
+                                200,
+                                {
+                                    "ok": True,
+                                    "enabled": False,
+                                    "restarting": True,
+                                    "message": "已关闭开机自启（本次控制台保持在线）",
+                                },
+                            )
+                            return
+                        ok_dis, msg_dis = daemon._autostart.disable(unload_now=False)
+                        self._send_json(200 if ok_dis else 400, {"ok": ok_dis, "enabled": False, "restarting": False, "message": msg_dis})
+                        return
 
                 self._send_json(404, {"error": f"未知接口：{path}"})
 
@@ -1118,14 +1228,36 @@ class VmrDaemon:
 
                 if path == "/api/v1/update/apply":
                     try:
+                        force = bool(body.get("force", False))
+                        auto_restart = bool(body.get("auto_restart", True))
+                        busy_cnt = daemon.active_jobs_count()
+                        if busy_cnt > 0 and not force:
+                            self._send_json(
+                                409,
+                                {
+                                    "ok": False,
+                                    "busy": True,
+                                    "error": f"当前有 {busy_cnt} 条录音正在转写或分析，为防止中断请等待完成后再一键更新。",
+                                },
+                            )
+                            return
                         from voice_review.updater import SelfUpdater
                         upd = SelfUpdater.default(daemon.cfg)
-                        info = upd.check_latest()
+                        info = upd.check_latest(use_cache=False)
                         if not info.ok or not info.download_url:
                             self._send_json(400, {"ok": False, "error": info.error or "当前无可用下载包"})
                             return
                         res = upd.apply_update(info.download_url, info.sha256)
-                        self._send_json(200 if res.ok else 400, res.to_dict())
+                        if not res.ok:
+                            self._send_json(400, res.to_dict())
+                            return
+                        payload = res.to_dict()
+                        if auto_restart:
+                            use_ld = daemon._autostart.status().enabled
+                            daemon.schedule_graceful_restart(use_launchd=use_ld)
+                            payload["restarting"] = True
+                            payload["message"] = (res.message + "；正在自动重启后台守护并刷新页面…")
+                        self._send_json(200, payload)
                     except Exception as exc:
                         self._send_json(400, {"ok": False, "error": str(exc)})
                     return
@@ -1168,6 +1300,8 @@ class VmrDaemon:
             self._http_thread.start()
             self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True, name="vmr-worker")
             self._worker_thread.start()
+            self._update_thread = threading.Thread(target=self._update_check_loop, daemon=True, name="vmr-update-check")
+            self._update_thread.start()
             return DaemonInfo(pid=os.getpid(), host=self.host, port=self.port, token=self.token)
         except Exception:
             self._lock.release()
@@ -1190,6 +1324,9 @@ class VmrDaemon:
         if self._http_thread is not None:
             self._http_thread.join(timeout=3.0)
             self._http_thread = None
+        if self._update_thread is not None:
+            self._update_thread.join(timeout=2.0)
+            self._update_thread = None
         try:
             self._info_path.unlink(missing_ok=True)
         except OSError:

@@ -188,12 +188,12 @@ printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
             cfg = load_config(vmr_home=root)
             srv = McpStdioServer(cfg)
 
-            # tools/list 包含全部 12 个工具
+            # tools/list 包含全部 13 个工具
             list_resp = srv.handle_message({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
             assert list_resp is not None
             names = {t["name"] for t in list_resp["result"]["tools"]}
-            self.assertEqual(len(names), 12)
-            self.assertTrue({"vmr_get_profile", "vmr_update_profile", "vmr_update_settings"}.issubset(names))
+            self.assertEqual(len(names), 13)
+            self.assertTrue({"vmr_get_profile", "vmr_update_profile", "vmr_update_settings", "vmr_check_update"}.issubset(names))
 
             # vmr_update_profile 写入个人背景、词表与默认模板
             upd_prof = srv.handle_message(
