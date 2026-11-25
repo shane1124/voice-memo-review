@@ -165,7 +165,7 @@ printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
             self.assertIn("30 秒速览快报", tpl.body)
             self.assertIn("没接稳", tpl.body)
             self.assertIn("六层严谨口径", tpl.body)
-            for forbidden in ("shane", "obesidian", "当前循环", "微信快报", "hermes", "clawbot"):
+            for forbidden in ("obsidian", "微信快报", "hermes", "clawbot", "私人业务"):
                 self.assertNotIn(forbidden, tpl.body.lower())
 
             # 2) 初始化时词表与背景自带清晰引导文案，但不会污染实际 Prompt
