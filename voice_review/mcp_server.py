@@ -15,6 +15,8 @@ from voice_review.config import (
     VoiceReviewConfig,
     config_to_dict,
     load_config,
+    resolve_claude_binary,
+    resolve_codex_binary,
     save_config_dict,
     validate_provider_combo,
 )
@@ -157,12 +159,13 @@ def _tool_defs() -> list[dict[str, Any]]:
                     "analyzer_auto_provider": {"type": "string", "description": "可选：antigravity-agentapi / codex-cli / claude-cli / openai-compatible-llm / gemini-llm / none"},
                     "analyzer_base_url": {"type": "string"},
                     "analyzer_model": {"type": "string"},
-                    "codex_open_desktop_chat": {"type": "boolean", "description": "可选（codex-cli 生效）：分析完成后自动在 Codex 桌面端打开带正文的对话窗口（默认 true）"},
+                    "open_desktop_chat": {"type": "boolean", "description": "可选（codex-cli / claude-cli 生效）：分析完成后自动在 Codex / Claude 桌面版打开带正文的对话窗口（默认 true）"},
+                    "codex_open_desktop_chat": {"type": "boolean", "description": "兼容别名，等价于 open_desktop_chat"},
                     "voice_memos_enabled": {"type": "boolean"},
                     "drop_folder_enabled": {"type": "boolean"},
                     "drop_folder_dir": {"type": "string"},
                     "autostart_enabled": {"type": "boolean", "description": "可选：开启或关闭 macOS 开机后台自启（launchd）"},
-                    "rotation": {"type": "string", "enum": ["daily", "weekly", "per_recording", "single"], "description": "可选：新开分析对话频率（daily 每天 / weekly 每周 / per_recording 每条独立 / single 单窗复用）"},
+                    "rotation": {"type": "string", "enum": ["per_recording", "daily", "weekly", "single"], "description": "可选：新录音分析对话归类策略（默认 per_recording 每条新开独立对话 / daily 按天合并 / weekly 按周合并 / single 单窗复用）"},
                     "output_dir": {"type": "string", "description": "可选：复盘分析稿保存目录"},
                     "min_duration_sec": {"type": "number", "description": "可选：自动跳过短于该秒数的误触录音（如 10 或 30）"},
                 },
@@ -239,8 +242,8 @@ class McpStdioServer:
                 "glossary_configured": bool(self.rules.get_glossary()),
                 "fluidaudio_ready": self.cfg.fluidaudio_bin is not None,
                 "agentapi_ready": self.cfg.agentapi_bin.is_file(),
-                "codex_ready": bool(shutil.which(self.cfg.codex_bin) or Path(self.cfg.codex_bin).is_file()),
-                "claude_ready": bool(shutil.which(self.cfg.claude_bin) or Path(self.cfg.claude_bin).is_file()),
+                "codex_ready": bool(resolve_codex_binary(self.cfg.codex_bin)),
+                "claude_ready": bool(resolve_claude_binary(self.cfg.claude_bin)),
                 "update_available": bool(cached_upd and cached_upd.has_update),
                 "latest_version": cached_upd.latest_version if cached_upd else __version__,
                 "release_notes": cached_upd.release_notes if cached_upd else "",
@@ -315,7 +318,7 @@ class McpStdioServer:
                 patch_for_daemon["transcriber"] = t_obj
 
             if "analyzer_auto_provider" in args or any(
-                k in args for k in ("analyzer_base_url", "analyzer_model", "codex_open_desktop_chat")
+                k in args for k in ("analyzer_base_url", "analyzer_model", "open_desktop_chat", "codex_open_desktop_chat")
             ):
                 new_a_prov = str(args.get("analyzer_auto_provider") or self.cfg.analyzer_auto_provider).strip().lower()
                 same_a = new_a_prov == self.cfg.analyzer_auto_provider
@@ -325,8 +328,13 @@ class McpStdioServer:
                     a_obj["base_url"] = str(args["analyzer_base_url"]).strip()
                 if args.get("analyzer_model") is not None:
                     a_obj["model"] = str(args["analyzer_model"]).strip()
-                if args.get("codex_open_desktop_chat") is not None and new_a_prov == "codex-cli":
-                    a_obj["open_desktop_chat"] = bool(args["codex_open_desktop_chat"])
+                raw_open = (
+                    args["open_desktop_chat"]
+                    if args.get("open_desktop_chat") is not None
+                    else args.get("codex_open_desktop_chat")
+                )
+                if raw_open is not None and new_a_prov in ("codex-cli", "claude-cli"):
+                    a_obj["open_desktop_chat"] = bool(raw_open)
                 merged["analyzer"] = a_obj
                 patch_for_daemon["analyzer"] = a_obj
 

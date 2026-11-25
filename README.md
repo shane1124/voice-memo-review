@@ -21,7 +21,7 @@
   - 更推荐安装完直接让你的 AI 结合你平时的工作场景（口述或经你授权扫描工作目录）为你量身生成一套专属分析模板与易错词表，所有规则 100% 明文存放在本机「规则工作室」，随时可改可预览。
 - **四插槽全可插拔，支持免 Key 调用本机 AI 客户端**：
   - **转写插槽**：Antigravity Flash（零 Key 含语气标注）/ Gemini API（直连含语气）/ OpenAI 兼容 ASR（Whisper / Groq / SiliconFlow / 本地 Whisper 服务）/ 自定义命令行 ASR（支持整轨或逐段，5 分钟接本地 Qwen3-ASR / whisper.cpp / 火山豆包 / 阿里云）。
-  - **后台自动分析插槽**：**Antigravity（免 Key 一体化）**、**Codex CLI（`codex-cli`，免 Key 直接复用本机账号，支持按天/周/单条分对话并在分析写完后自动弹开带正文的 Codex 桌面窗口直接追问）**、**Claude Code CLI（`claude-cli`，免 Key 直接用本机 Claude 账号）**、DeepSeek / OpenAI / Ollama / Gemini API，或留待 MCP 对话接手。
+  - **后台自动分析插槽**：**Antigravity 桌面版（免 Key 一体化）**、**Codex 桌面版（`codex-cli`，免 Key 自动探测桌面 App 内置引擎，分析后自动弹出桌面对话直接追问）**、**Claude 桌面版（`claude-cli`，免 Key 自动探测桌面 App 内置引擎，分析后自动通过 `--desktop --resume` 弹出 Claude 桌面对话直接追问）**、DeepSeek / OpenAI / Ollama / Gemini API，或留待 MCP 对话接手；默认每条新录音自动新开独立对话（支持改按天/按周/单窗续聊）。
 - **macOS 开机后台自启 + 无感安全热更新**：
   - 一键 `vmr autostart on` 或控制台开关开启标准 `launchd` 后台常驻（开机自启、关终端不掉线、崩溃自动拉起）。
   - 守护进程每 24 小时带 `ETag` 静默检查一次 GitHub 新版本；有新版时在控制台顶部横幅与 AI 对话里温和提醒；点击「一键更新并重启」或运行 `vmr update` 自动避开正在转写的录音，校验 `SHA256SUMS` 原子替换并自动无感重启刷新页面。
@@ -38,7 +38,7 @@
 | **1. 音频输入** | `voice_memos` / `drop_folder` / 单文件拖拽 / MCP | 支持苹果语音备忘录（需 iCloud 同步）与任意本地投放文件夹（免 iCloud） |
 | **2. 本地预处理** | `fluidaudio`（默认）/ `none` | 10MB 本地 Core ML 声纹分离 + 250ms 防咬字切段 + 纯静音自动跳过；也可关闭声纹走均匀切块 |
 | **3. 转写引擎** | `antigravity-flash` / `gemini-api` / `openai-compatible-asr` / `command-asr` | 共享断点缓存与 429 退避重试；`command-asr` 支持整轨 JSON 自动按时间轴回贴声纹 |
-| **4. 规则与分析** | `antigravity-agentapi` / `codex-cli` / `claude-cli` / `openai-compatible-llm` / `gemini-llm` / `none` | 支持免 Key 直调本机 Codex / Claude / Antigravity；超 8 万字长稿自动分段提炼再汇总；规则全明文可改 |
+| **4. 规则与分析** | `antigravity-agentapi` / `codex-cli` / `claude-cli` / `openai-compatible-llm` / `gemini-llm` / `none` | 支持免 Key 联动 Antigravity / Codex 桌面版 / Claude 桌面版并自动弹出桌面对话；默认每条新录音独立开窗；超 8 万字自动分段汇总 |
 
 ---
 

@@ -7,10 +7,10 @@ min_duration_sec = 10
 debounce_sec = 12
 analysis_timeout_sec = 900
 
-# Antigravity 对话设置（仅当选用 antigravity-* 插槽时生效）
+# 桌面 AI 对话设置（Antigravity / Codex 桌面版 / Claude 桌面版通用）
 model = "gemini-4-neon-xhigh"
 conversation_title = "录音自动分析助手"
-rotation = "weekly"  # weekly | daily | per_recording | single
+rotation = "per_recording"  # per_recording（默认，每条新录音开独立对话） | daily | weekly | single
 
 # 插槽 1：音频输入源（可同时开启，不依赖 iCloud 也能用投放文件夹）
 [sources]
@@ -40,9 +40,10 @@ provider = "antigravity-flash"  # antigravity-flash | gemini-api | openai-compat
 
 # 插槽 4：后台自动分析引擎（MCP 对话内始终由当前宿主 AI 分析）
 [analyzer]
-auto_provider = "antigravity-agentapi"  # antigravity-agentapi | codex-cli | claude-cli | openai-compatible-llm | gemini-llm | none
-# codex-cli / claude-cli（免 API Key，直接复用本机已登录客户端，可选指定 model，留空走默认）：
+auto_provider = "antigravity-agentapi"  # antigravity-agentapi | codex-cli（Codex 桌面版） | claude-cli（Claude 桌面版） | openai-compatible-llm | gemini-llm | none
+# codex-cli / claude-cli（免 API Key，自动探测桌面 App 内置引擎，分析后默认自动弹出桌面对话）：
 # model = ""
+# open_desktop_chat = true
 # openai-compatible-llm 示例（兼容 DeepSeek / OpenAI / Kimi / 通义 / Ollama）：
 # base_url = "https://api.deepseek.com/v1"
 # model = "deepseek-chat"

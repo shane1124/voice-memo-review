@@ -221,18 +221,29 @@
               <div class="group-title">后台自动分析引擎</div>
               <button class="btn text-btn" id="testAnalyzerBtn" type="button">测试连通</button>
             </div>
-            <p class="group-desc">支持免 Key 调用本机 AI 客户端自动分析；在 Codex / Claude Code / Antigravity 新对话里也可随时通过 MCP 读取并追问复盘。</p>
+            <p class="group-desc">支持免 Key 直接联动本机桌面版 AI（Antigravity / Codex 桌面版 / Claude 桌面版），分析完自动在桌面端弹出对话直接追问。</p>
             <div class="settings-card">
               <div class="setting-row">
                 <label class="field">
                   <span>选择后台分析提供方</span>
                   <select id="cfgAnalyzer">
-                    <option value="antigravity-agentapi">Antigravity 后台投递（与 antigravity-flash 一体化免费）</option>
-                    <option value="codex-cli">Codex CLI（免 Key，直接用本机已登录 Codex 账号）</option>
-                    <option value="claude-cli">Claude Code CLI（免 Key，直接用本机已登录 Claude 账号）</option>
+                    <option value="antigravity-agentapi">Antigravity 桌面版后台投递（与 antigravity-flash 一体化免费）</option>
+                    <option value="codex-cli">Codex 桌面版（免 Key，分析后自动打开桌面对话）</option>
+                    <option value="claude-cli">Claude 桌面版（免 Key，分析后自动打开桌面对话）</option>
                     <option value="openai-compatible-llm">OpenAI 兼容大模型（DeepSeek / OpenAI / Kimi / Ollama）</option>
                     <option value="gemini-llm">Gemini API 大模型（长上下文直读）</option>
                     <option value="none">仅自动转写，留待手动或 MCP 对话接手分析</option>
+                  </select>
+                </label>
+              </div>
+              <div class="setting-row" data-an-field="rotation" hidden>
+                <label class="field">
+                  <span>有新录音时的对话归类方式</span>
+                  <select id="cfgRotation">
+                    <option value="per_recording">每条新录音新开一条独立对话（默认推荐）</option>
+                    <option value="daily">按天合并到同一对话</option>
+                    <option value="weekly">按周合并到同一对话</option>
+                    <option value="single">始终复用同一个对话</option>
                   </select>
                 </label>
               </div>
@@ -244,14 +255,14 @@
               </div>
               <div class="setting-row" data-an-field="model" hidden>
                 <label class="field">
-                  <span>模型名称（Codex / Claude CLI 留空则使用客户端默认模型）</span>
+                  <span>模型名称（Codex / Claude 桌面版留空则使用客户端默认模型）</span>
                   <input type="text" id="cfgAnModel" placeholder="deepseek-chat / gemini-2.5-pro" />
                 </label>
               </div>
               <div class="setting-row" data-an-field="open_desktop_chat" hidden>
                 <label class="switch-pill">
                   <input type="checkbox" id="cfgAnOpenDesktopChat" checked />
-                  <span>分析完成后自动在 Codex 桌面端打开带正文的对话窗口（支持按轮换策略续聊追问）</span>
+                  <span>分析完成后自动在桌面端（Codex / Claude）弹出带完整分析稿的对话窗口</span>
                 </label>
               </div>
               <div class="setting-row" data-an-field="api_key" hidden>

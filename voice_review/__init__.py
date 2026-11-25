@@ -26,7 +26,7 @@ from voice_review.workflow_builder import (
     sanitize_transcript_field,
 )
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 __all__ = [
     "DiarizationResult",

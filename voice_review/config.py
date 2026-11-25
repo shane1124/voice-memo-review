@@ -76,11 +76,126 @@ def _find_fluidaudio(raw: Any) -> Path | None:
     return find_fluidaudio_bin(None)
 
 
+def _parse_version_tuple(raw: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for seg in raw.strip().split("."):
+        try:
+            parts.append(int(seg))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts)
+
+
+def _is_exec_file(p: Path) -> bool:
+    try:
+        return p.is_file() and os.access(p, os.X_OK)
+    except OSError:
+        return False
+
+
+def resolve_codex_binary(raw: str = "") -> str | None:
+    """定位本机 Codex 引擎：优先显式路径/CLI，其次自动探测 Codex / ChatGPT 桌面版内置引擎。"""
+    val = (raw or "").strip()
+    if val:
+        p = Path(val).expanduser()
+        if _is_exec_file(p):
+            return str(p.resolve())
+        hit = shutil.which(val)
+        if hit:
+            return hit
+        # 显式指定了具体路径（含路径分隔符）且不存在时不静默替换，避免掩盖误配置
+        if "/" in val or "\\" in val:
+            return None
+    for bdir in _managed_bin_dirs():
+        cand = bdir / "codex"
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    hit = shutil.which("codex")
+    if hit:
+        return hit
+    home = Path.home()
+    candidates = [
+        Path("/opt/homebrew/bin/codex"),
+        Path("/usr/local/bin/codex"),
+        home / ".local/bin/codex",
+        Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"),
+        home / "Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+        Path("/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex"),
+        Path("/Applications/Codex.app/Contents/Resources/codex"),
+        home / "Applications/Codex.app/Contents/Resources/codex-cli/bin/codex",
+        home / "Applications/Codex.app/Contents/Resources/codex",
+    ]
+    for cand in candidates:
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    return None
+
+
+def resolve_claude_binary(raw: str = "") -> str | None:
+    """定位本机 Claude 引擎：优先显式路径/CLI，其次自动探测 Claude 桌面版内置引擎。"""
+    val = (raw or "").strip()
+    if val:
+        p = Path(val).expanduser()
+        if _is_exec_file(p):
+            return str(p.resolve())
+        hit = shutil.which(val)
+        if hit:
+            return hit
+        if "/" in val or "\\" in val:
+            return None
+    for bdir in _managed_bin_dirs():
+        cand = bdir / "claude"
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    hit = shutil.which("claude")
+    if hit:
+        return hit
+    home = Path.home()
+    for cand in (
+        home / ".local/bin/claude",
+        Path("/opt/homebrew/bin/claude"),
+        Path("/usr/local/bin/claude"),
+    ):
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    # 自动探测 macOS Claude 桌面版内置的 claude-code 引擎（按版本号降序选最新）
+    app_support = home / "Library/Application Support/Claude"
+    cc_root = app_support / "claude-code"
+    if cc_root.is_dir():
+        ver_dirs = sorted(
+            (d for d in cc_root.iterdir() if d.is_dir()),
+            key=lambda d: _parse_version_tuple(d.name),
+            reverse=True,
+        )
+        for vdir in ver_dirs:
+            for cand in sorted(vdir.glob("*/claude.app/Contents/MacOS/claude"), reverse=True):
+                if _is_exec_file(cand):
+                    return str(cand.resolve())
+    vm_root = app_support / "claude-code-vm"
+    if vm_root.is_dir():
+        ver_dirs = sorted(
+            (d for d in vm_root.iterdir() if d.is_dir()),
+            key=lambda d: _parse_version_tuple(d.name),
+            reverse=True,
+        )
+        for vdir in ver_dirs:
+            cand = vdir / "claude"
+            if _is_exec_file(cand):
+                return str(cand.resolve())
+    return None
+
+
 def _find_agentapi(raw: str) -> Path:
-    val = (raw or "").strip() or os.environ.get("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
+    val = (raw or "").strip()
     if val:
         return Path(val).expanduser().resolve()
-    return (Path.home() / ".gemini/antigravity/bin/agentapi").resolve()
+    default_wrapper = (Path.home() / ".gemini/antigravity/bin/agentapi").resolve()
+    if default_wrapper.is_file():
+        return default_wrapper
+    env_val = os.environ.get("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
+    if env_val:
+        return Path(env_val).expanduser().resolve()
+    return default_wrapper
 
 
 def _resolve_path(raw: str, base: Path) -> Path:
@@ -266,7 +381,7 @@ def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None
         analysis_timeout_sec=float(raw.get("analysis_timeout_sec", 900.0)),
         model=str(raw.get("model", "gemini-4-neon-xhigh")),
         conversation_title=str(raw.get("conversation_title", "录音自动分析助手")),
-        rotation=str(raw.get("rotation", "weekly")),
+        rotation=str(raw.get("rotation", "per_recording")),
         asr_context=str(raw.get("asr_context", "")).strip(),
         segmenter=seg_cfg,
         config_path=cfg_file,
@@ -286,8 +401,8 @@ def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None
         default_template_id=str(raw.get("default_template_id", "general_review")).strip() or "general_review",
         update_repo=str(upd_raw.get("repo", DEFAULT_UPDATE_REPO)).strip() or DEFAULT_UPDATE_REPO,
         ui_port=int(ui_raw.get("port", 18765)),
-        codex_bin=_find_bin(str(raw.get("codex_bin", "")), "codex"),
-        claude_bin=_find_bin(str(raw.get("claude_bin", "")), "claude"),
+        codex_bin=resolve_codex_binary(str(raw.get("codex_bin", ""))) or _find_bin(str(raw.get("codex_bin", "")), "codex"),
+        claude_bin=resolve_claude_binary(str(raw.get("claude_bin", ""))) or _find_bin(str(raw.get("claude_bin", "")), "claude"),
     )
 
 

@@ -13,7 +13,13 @@ import webbrowser
 
 from voice_review import __version__
 from voice_review.autostart import AutostartManager, run_restart_helper, spawn_restart_helper
-from voice_review.config import VoiceReviewConfig, load_config, validate_provider_combo
+from voice_review.config import (
+    VoiceReviewConfig,
+    load_config,
+    resolve_claude_binary,
+    resolve_codex_binary,
+    validate_provider_combo,
+)
 from voice_review.daemon import (
     DaemonAlreadyRunningError,
     PipelineExecutor,
@@ -68,13 +74,15 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
     autostart_st = AutostartManager.default(cfg.vmr_home).status()
     vm_ok, vm_detail = _probe_voice_memos_access(cfg.recordings_dir)
     local_asrs = _detect_local_asr_tools()
+    codex_exe = resolve_codex_binary(cfg.codex_bin)
+    claude_exe = resolve_claude_binary(cfg.claude_bin)
     checks = [
         ("ffmpeg", shutil.which(cfg.ffmpeg_bin) is not None or Path(cfg.ffmpeg_bin).is_file(), cfg.ffmpeg_bin),
         ("ffprobe", shutil.which(cfg.ffprobe_bin) is not None or Path(cfg.ffprobe_bin).is_file(), cfg.ffprobe_bin),
         ("FluidAudio (fluidaudiocli)", cfg.fluidaudio_bin is not None, str(cfg.fluidaudio_bin or "未找到（可设 preprocessor=none）")),
         ("Antigravity agentapi", cfg.agentapi_bin.is_file(), str(cfg.agentapi_bin)),
-        ("Codex CLI（免 Key 分析）", shutil.which(cfg.codex_bin) is not None or Path(cfg.codex_bin).is_file(), cfg.codex_bin),
-        ("Claude Code CLI（免 Key 分析）", shutil.which(cfg.claude_bin) is not None or Path(cfg.claude_bin).is_file(), cfg.claude_bin),
+        ("Codex 桌面版 / CLI（免 Key 分析）", codex_exe is not None, codex_exe or cfg.codex_bin),
+        ("Claude 桌面版 / CLI（免 Key 分析）", claude_exe is not None, claude_exe or cfg.claude_bin),
         ("苹果语音备忘录读取权限", vm_ok, vm_detail),
         ("开机后台自启（launchd）", autostart_st.enabled, ("已开启" + (" · 运行托管中" if autostart_st.loaded else " · 下次开机生效")) if autostart_st.enabled else "未开启（可用 vmr autostart on 开启）"),
         ("插槽组合校验", ok_combo, f"{cfg.transcriber_provider} + {cfg.analyzer_auto_provider} ({combo_msg})"),

@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from datetime import datetime
 import hashlib
 import json
+import os
 from pathlib import Path
 import plistlib
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,7 +26,7 @@ from voice_review.agent_bridge import (
     render_v2_review_prompt,
     resolve_bucket,
 )
-from voice_review.config import VoiceReviewConfig
+from voice_review.config import VoiceReviewConfig, resolve_claude_binary, resolve_codex_binary
 from voice_review.rules import RuleStudio
 from voice_review.secrets import SecretStore
 from voice_review.state import StateStore
@@ -422,8 +424,119 @@ def _open_codex_desktop_url(chat_url: str) -> bool:
         return False
 
 
+def _parse_claude_json_output(stdout_text: str) -> tuple[str, str, bool]:
+    """解析 `claude -p --output-format json` 输出，兼容纯文本回退。返回 (text, session_id, is_error)。"""
+    raw = (stdout_text or "").strip()
+    if not raw:
+        return "", "", False
+    parsed: dict | None = None
+    try:
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            parsed = obj
+    except json.JSONDecodeError:
+        for line in reversed(raw.splitlines()):
+            s = line.strip()
+            if not s.startswith("{"):
+                continue
+            try:
+                obj = json.loads(s)
+                if isinstance(obj, dict) and ("result" in obj or "session_id" in obj):
+                    parsed = obj
+                    break
+            except json.JSONDecodeError:
+                continue
+    if parsed is None:
+        return raw, "", False
+    text = str(parsed.get("result") or "").strip()
+    raw_sid = str(parsed.get("session_id") or "").strip()
+    sid = ""
+    if raw_sid:
+        try:
+            sid = str(uuid.UUID(raw_sid))
+        except ValueError:
+            sid = ""
+    is_err = bool(parsed.get("is_error"))
+    return text, sid, is_err
+
+
+def _write_claude_launcher(
+    output_dir: Path,
+    *,
+    recorded_at: str,
+    title: str,
+    recording_id: str,
+    claude_bin: str,
+    session_id: str,
+) -> Path | None:
+    try:
+        links_dir = output_dir / "录音对话"
+        links_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dt = datetime.fromisoformat(recorded_at).astimezone()
+            stamp = dt.strftime("%Y-%m-%d %H%M%S")
+        except Exception:
+            stamp = datetime.now().strftime("%Y-%m-%d %H%M%S")
+        safe_title = re.sub(r'[\\/:*?"<>|\n\r]+', "_", (title or "录音分析").strip())[:36].strip("_") or "录音分析"
+        short_key = hashlib.sha256(recording_id.encode("utf-8")).hexdigest()[:8]
+        target = links_dir / f"{stamp} {safe_title} · {short_key}.command"
+        script = (
+            "#!/usr/bin/env bash\n"
+            f"cd {shlex.quote(str(output_dir.resolve()))} || exit 1\n"
+            f"exec {shlex.quote(claude_bin)} --desktop --resume {shlex.quote(session_id)}\n"
+        )
+        tmp = target.with_suffix(".tmp")
+        tmp.write_text(script, encoding="utf-8")
+        os.chmod(tmp, 0o700)
+        tmp.replace(target)
+        return target
+    except Exception:
+        return None
+
+
+def open_claude_desktop_session(claude_bin: str, session_id: str, work_cwd: Path) -> bool:
+    """非阻塞唤起 Claude 桌面版并定位到对应分析会话。"""
+    if sys.platform != "darwin":
+        return False
+    try:
+        sid = str(uuid.UUID(session_id.strip()))
+    except ValueError:
+        return False
+    exe = resolve_claude_binary(claude_bin)
+    if not exe:
+        return False
+    try:
+        work_cwd.mkdir(parents=True, exist_ok=True)
+        subprocess.Popen(
+            [exe, "--desktop", "--resume", sid],
+            cwd=str(work_cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def open_job_desktop_chat(cfg: VoiceReviewConfig, chat_url: str) -> tuple[bool, str]:
+    """统一桌面端唤起入口（供控制台一键按钮与自动打开共用）。"""
+    url = (chat_url or "").strip()
+    if not url:
+        return False, "该记录暂无关联的桌面对话"
+    if url.startswith("codex://"):
+        ok = _open_codex_desktop_url(url)
+        return (True, "已在 Codex 桌面版打开对话") if ok else (False, "唤起 Codex 桌面版失败，请确认已安装 Codex / ChatGPT 桌面版")
+    if url.startswith("claude-session://"):
+        sid = url[len("claude-session://"):].strip()
+        ok = open_claude_desktop_session(cfg.claude_bin, sid, cfg.output_dir)
+        return (True, "已在 Claude 桌面版打开对话") if ok else (False, "唤起 Claude 桌面版失败，请确认已安装并登录 Claude 桌面版")
+    return False, f"不支持的桌面对话协议：{url[:40]}"
+
+
 class CodexCliAnalyzer(AnalyzerProvider):
-    """免 API Key：直接调用本机已登录 Codex CLI（codex exec）自动分析，并支持按策略分对话及自动打开桌面 Codex 对话。"""
+    """免 API Key：直接调用本机 Codex 桌面版内置引擎或 Codex CLI 自动分析，支持按策略分对话及自动打开 Codex 桌面版。"""
 
     provider_id = "codex-cli"
 
@@ -445,10 +558,10 @@ class CodexCliAnalyzer(AnalyzerProvider):
         ephemeral: bool = False,
         resume_thread_id: str = "",
     ) -> tuple[str, str]:
-        exe = _resolve_cli_binary(self.cfg.codex_bin)
+        exe = resolve_codex_binary(self.cfg.codex_bin)
         if not exe:
             raise RuntimeError(
-                f"未检测到本机 Codex CLI（{self.cfg.codex_bin}），请先安装并登录 Codex，或切换其他分析引擎。"
+                f"未检测到本机 Codex 桌面版或 Codex CLI（{self.cfg.codex_bin}），请先安装并登录 Codex，或切换其他分析引擎。"
             )
         work_cwd.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(prefix="vmr-codex-", suffix=".md", delete=False) as tf:
@@ -489,14 +602,14 @@ class CodexCliAnalyzer(AnalyzerProvider):
                 if resume_thread_id and not ephemeral:
                     return self._run_codex(prompt, work_cwd=work_cwd, ephemeral=False, resume_thread_id="")
                 detail = (proc.stderr or proc.stdout or "").strip()[-320:]
-                raise RuntimeError(f"Codex CLI 分析失败（exit={proc.returncode}）：{detail}")
+                raise RuntimeError(f"Codex 桌面版分析失败（exit={proc.returncode}）：{detail}")
             if not text and ephemeral:
                 text = (proc.stdout or "").strip()
             if not text:
-                raise RuntimeError("Codex CLI 返回空分析内容")
+                raise RuntimeError("Codex 桌面版返回空分析内容")
             return text, tid
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"Codex CLI 分析超时（{self.timeout_sec}s）") from exc
+            raise RuntimeError(f"Codex 桌面版分析超时（{self.timeout_sec}s）") from exc
         finally:
             out_file.unlink(missing_ok=True)
 
@@ -589,45 +702,91 @@ class CodexCliAnalyzer(AnalyzerProvider):
 
 
 class ClaudeCliAnalyzer(AnalyzerProvider):
-    """免 API Key：直接调用本机已登录的 Claude Code CLI（claude -p）按显化模板自动生成复盘。"""
+    """免 API Key：调用本机 Claude 桌面版内置引擎或 Claude Code CLI 自动分析，支持按策略分对话及自动打开 Claude 桌面版。"""
 
     provider_id = "claude-cli"
 
-    def __init__(self, cfg: VoiceReviewConfig, rules: RuleStudio) -> None:
+    def __init__(self, cfg: VoiceReviewConfig, rules: RuleStudio, store: StateStore | None = None) -> None:
         self.cfg = cfg
         self.rules = rules
+        self.store = store
         st = cfg.analyzer_settings
         self.model = str(st.get("model") or "").strip()
         self.max_chunk_chars = max(10_000, int(st.get("max_chunk_chars", DEFAULT_MAX_CHUNK_CHARS)))
         self.timeout_sec = max(60, int(st.get("timeout_sec", 420)))
+        self.open_desktop_chat = bool(st.get("open_desktop_chat", True))
 
-    def _run_claude(self, prompt: str) -> str:
-        exe = _resolve_cli_binary(self.cfg.claude_bin)
+    def _run_claude(
+        self,
+        prompt: str,
+        *,
+        work_cwd: Path,
+        session_name: str = "",
+        ephemeral: bool = False,
+        resume_session_id: str = "",
+    ) -> tuple[str, str]:
+        exe = resolve_claude_binary(self.cfg.claude_bin)
         if not exe:
             raise RuntimeError(
-                f"未检测到本机 Claude Code CLI（{self.cfg.claude_bin}），请先安装并登录 Claude Code，或切换其他分析引擎。"
+                f"未检测到本机 Claude 桌面版或 Claude Code CLI（{self.cfg.claude_bin}），请先安装并登录 Claude，或切换其他分析引擎。"
             )
-        cmd = [exe, "-p", "--output-format", "text"]
+        work_cwd.mkdir(parents=True, exist_ok=True)
+        cmd = [exe, "-p", "--output-format", "json", "--tools", ""]
         if self.model:
             cmd += ["--model", self.model]
+        if ephemeral:
+            cmd.append("--no-session-persistence")
+        elif resume_session_id:
+            cmd += ["--resume", resume_session_id]
+        elif session_name:
+            cmd += ["--name", session_name]
         try:
             proc = subprocess.run(
                 cmd,
                 input=prompt,
+                cwd=str(work_cwd),
                 capture_output=True,
                 text=True,
                 timeout=self.timeout_sec,
                 check=False,
             )
-            text = (proc.stdout or "").strip()
+            text, sid, is_err = _parse_claude_json_output(proc.stdout)
+            sid = "" if ephemeral else (sid or resume_session_id)
+            if is_err:
+                low = text.lower()
+                if "not logged in" in low or "/login" in low:
+                    raise RuntimeError(
+                        "本机 Claude 尚未登录：请打开 Claude 桌面版「Code」页签登录账号，或在终端运行 `claude /login` 后重试。"
+                    )
+                if resume_session_id and not ephemeral:
+                    return self._run_claude(
+                        prompt,
+                        work_cwd=work_cwd,
+                        session_name=session_name,
+                        ephemeral=False,
+                        resume_session_id="",
+                    )
+                raise RuntimeError(f"Claude 桌面版分析返回错误：{text[-320:]}")
             if proc.returncode != 0 and not text:
+                if resume_session_id and not ephemeral:
+                    return self._run_claude(
+                        prompt,
+                        work_cwd=work_cwd,
+                        session_name=session_name,
+                        ephemeral=False,
+                        resume_session_id="",
+                    )
                 detail = (proc.stderr or proc.stdout or "").strip()[-320:]
-                raise RuntimeError(f"Claude Code CLI 分析失败（exit={proc.returncode}）：{detail}")
+                if "not logged in" in detail.lower() or "/login" in detail.lower():
+                    raise RuntimeError(
+                        "本机 Claude 尚未登录：请打开 Claude 桌面版「Code」页签登录账号，或在终端运行 `claude /login` 后重试。"
+                    )
+                raise RuntimeError(f"Claude 桌面版分析失败（exit={proc.returncode}）：{detail}")
             if not text:
-                raise RuntimeError("Claude Code CLI 返回空分析内容")
-            return text
+                raise RuntimeError("Claude 桌面版返回空分析内容")
+            return text, sid
         except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"Claude Code CLI 分析超时（{self.timeout_sec}s）") from exc
+            raise RuntimeError(f"Claude 桌面版分析超时（{self.timeout_sec}s）") from exc
 
     def analyze(self, req: AnalysisRequest) -> AnalysisOutcome:
         try:
@@ -635,13 +794,23 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
         except OSError as exc:
             return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=f"读取转录稿失败：{exc}")
         chunks = chunk_text_for_summary(transcript_text, max_chars=self.max_chunk_chars)
-        header = (
+        stamp_short = (req.recorded_at or "")[:16].replace("T", " ")
+        lead = (
+            f"请分析 {stamp_short} 的录音《{req.title}》。"
+            f"后续追问可直接查阅原始转录稿：`{req.transcript_path.resolve()}`。\n\n"
             "你是一位严谨、客观的中文录音分析专家。"
-            "请直接输出最终完整的 Markdown 复盘正文（不要输出执行过程旁白）。\n\n"
+            "请直接输出最终完整的 Markdown 分析正文（不要输出执行过程旁白，也不要尝试修改本地文件）。\n\n"
         )
+
+        bucket, bucket_title = resolve_bucket(self.cfg, req.recorded_at)
+        meta_key = f"claude_{bucket}" if bucket else None
+        prev_sid = (self.store.get_meta(meta_key) or "") if (self.store is not None and meta_key) else ""
+        session_name = bucket_title if bucket else f"录音分析 · {req.title[:28]}"
+
+        session_id = ""
         try:
             if len(chunks) <= 1:
-                prompt = header + self.rules.compose_analysis_prompt(
+                prompt = lead + self.rules.compose_analysis_prompt(
                     template_id=req.template_id or self.cfg.default_template_id,
                     title=req.title,
                     recorded_at=req.recorded_at,
@@ -650,19 +819,30 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
                     transcript_text=transcript_text,
                     extra_sections=req.extra_prompt_sections,
                 )
-                result_md = self._run_claude(prompt)
+                result_md, session_id = self._run_claude(
+                    prompt,
+                    work_cwd=self.cfg.output_dir,
+                    session_name=session_name,
+                    ephemeral=False,
+                    resume_session_id=prev_sid,
+                )
             else:
                 partials: list[str] = []
                 for idx, chunk in enumerate(chunks, 1):
                     sub_prompt = (
-                        header
+                        "你是一位严谨、客观的中文录音分析专家。请直接输出高密度要点，不要多余旁白。\n\n"
                         + f"这是超长录音《{req.title}》的第 {idx}/{len(chunks)} 段转录稿。"
                         "请高密度提炼本段核心事实、关键数字、人物承诺、争议分歧与情绪波动（保留原话 `[HH:MM:SS]` 时间戳），"
                         "不要遗漏关键业务信息：\n\n"
                         + chunk
                     )
-                    partials.append(f"### 分段提炼 {idx}/{len(chunks)}\n" + self._run_claude(sub_prompt))
-                final_prompt = header + self.rules.compose_analysis_prompt(
+                    sub_md, _ = self._run_claude(
+                        sub_prompt,
+                        work_cwd=self.cfg.output_dir,
+                        ephemeral=True,
+                    )
+                    partials.append(f"### 分段提炼 {idx}/{len(chunks)}\n" + sub_md)
+                final_prompt = lead + self.rules.compose_analysis_prompt(
                     template_id=req.template_id or self.cfg.default_template_id,
                     title=req.title,
                     recorded_at=req.recorded_at,
@@ -671,13 +851,37 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
                     transcript_text="\n\n".join(partials),
                     extra_sections=req.extra_prompt_sections,
                 )
-                result_md = self._run_claude(final_prompt)
+                result_md, session_id = self._run_claude(
+                    final_prompt,
+                    work_cwd=self.cfg.output_dir,
+                    session_name=session_name,
+                    ephemeral=False,
+                    resume_session_id=prev_sid,
+                )
         except Exception as exc:
             return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=str(exc))
 
         req.analysis_path.parent.mkdir(parents=True, exist_ok=True)
         req.analysis_path.write_text(result_md.rstrip() + "\n", encoding="utf-8")
-        return AnalysisOutcome(ok=True, status="done", analysis_path=req.analysis_path)
+
+        chat_url = ""
+        if session_id:
+            if self.store is not None and meta_key:
+                self.store.set_meta(meta_key, session_id)
+            chat_url = f"claude-session://{session_id}"
+            exe = resolve_claude_binary(self.cfg.claude_bin) or self.cfg.claude_bin
+            _write_claude_launcher(
+                self.cfg.output_dir,
+                recorded_at=req.recorded_at,
+                title=req.title,
+                recording_id=req.recording_id,
+                claude_bin=exe,
+                session_id=session_id,
+            )
+            if self.open_desktop_chat:
+                open_claude_desktop_session(exe, session_id, self.cfg.output_dir)
+
+        return AnalysisOutcome(ok=True, status="done", analysis_path=req.analysis_path, chat_url=chat_url)
 
 
 def get_analyzer(
@@ -696,7 +900,7 @@ def get_analyzer(
     if pid == "codex-cli":
         return CodexCliAnalyzer(cfg, rules, store=store)
     if pid == "claude-cli":
-        return ClaudeCliAnalyzer(cfg, rules)
+        return ClaudeCliAnalyzer(cfg, rules, store=store)
     if pid == "openai-compatible-llm":
         return OpenAICompatibleLlmAnalyzer(cfg, secrets, rules)
     if pid == "gemini-llm":
@@ -712,11 +916,36 @@ def test_analyzer_connection(cfg: VoiceReviewConfig, secrets: SecretStore) -> tu
         ok = cfg.agentapi_bin.is_file()
         return (True, f"本机 Antigravity 可用：{cfg.agentapi_bin}") if ok else (False, f"未检测到 agentapi：{cfg.agentapi_bin}")
     if pid == "codex-cli":
-        exe = _resolve_cli_binary(cfg.codex_bin)
-        return (True, f"本机 Codex CLI 可用（免 Key）：{exe}") if exe else (False, f"未检测到 Codex CLI：{cfg.codex_bin}")
+        exe = resolve_codex_binary(cfg.codex_bin)
+        return (
+            (True, f"本机 Codex 桌面版 / Codex CLI 可用（免 Key）：{exe}")
+            if exe
+            else (False, f"未检测到 Codex 桌面版或 Codex CLI：{cfg.codex_bin}")
+        )
     if pid == "claude-cli":
-        exe = _resolve_cli_binary(cfg.claude_bin)
-        return (True, f"本机 Claude Code CLI 可用（免 Key）：{exe}") if exe else (False, f"未检测到 Claude Code CLI：{cfg.claude_bin}")
+        exe = resolve_claude_binary(cfg.claude_bin)
+        if not exe:
+            return False, f"未检测到 Claude 桌面版或 Claude Code CLI：{cfg.claude_bin}"
+        try:
+            proc = subprocess.run(
+                [exe, "auth", "status"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=2.5,
+                check=False,
+            )
+            raw_auth = (proc.stdout or "").strip()
+            if raw_auth.startswith("{"):
+                st = json.loads(raw_auth)
+                if isinstance(st, dict) and st.get("loggedIn") is False:
+                    return (
+                        False,
+                        f"已检测到 Claude 桌面版 / Claude Code CLI（{exe}），但尚未登录，请先在 Claude 桌面版登录或运行 `claude /login`",
+                    )
+        except Exception:
+            pass
+        return True, f"本机 Claude 桌面版 / Claude Code CLI 可用（免 Key）：{exe}"
     if pid == "openai-compatible-llm":
         base = str(cfg.analyzer_settings.get("base_url") or "https://api.openai.com/v1").rstrip("/")
         key = secrets.get("openai_llm_api_key", env_var="OPENAI_API_KEY")

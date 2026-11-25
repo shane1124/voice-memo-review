@@ -1184,6 +1184,19 @@ class VmrDaemon:
                     self._send_json(200 if res.ok else 400, {"ok": res.ok, "status": res.status, "error": res.error})
                     return
 
+                m_open_chat = re.fullmatch(r"/api/v1/jobs/([^/]+)/open-chat", path)
+                if m_open_chat:
+                    from voice_review.analyzers import open_job_desktop_chat
+
+                    rec_id = urllib.parse.unquote(m_open_chat.group(1))
+                    rec = daemon.store.get(rec_id)
+                    if rec is None:
+                        self._send_json(404, {"ok": False, "error": "记录不存在"})
+                        return
+                    ok_open, msg_open = open_job_desktop_chat(daemon.cfg, rec.chat_url)
+                    self._send_json(200 if ok_open else 400, {"ok": ok_open, "message": msg_open})
+                    return
+
                 m_retry = re.fullmatch(r"/api/v1/jobs/([^/]+)/retry", path)
                 if m_retry:
                     rec_id = urllib.parse.unquote(m_retry.group(1))

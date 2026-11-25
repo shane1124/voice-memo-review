@@ -238,6 +238,13 @@
         ? ` ${j.progress_done}/${j.progress_total}` : "";
       const errNote = j.last_error ? ` · ${escapeHtml(j.last_error.slice(0, 60))}` : "";
       const canRead = Boolean(j.transcript_path || j.analysis_path);
+      const hasCodexChat = Boolean(j.chat_url && j.chat_url.startsWith("codex://"));
+      const hasClaudeChat = Boolean(j.chat_url && j.chat_url.startsWith("claude-session://"));
+      const chatBtnHtml = hasCodexChat
+        ? `<button class="btn subtle" data-open-chat="${escapeHtml(j.recording_id)}" type="button">在 Codex 打开</button>`
+        : (hasClaudeChat
+          ? `<button class="btn subtle" data-open-chat="${escapeHtml(j.recording_id)}" type="button">在 Claude 打开</button>`
+          : "");
       return `
         <div class="job-row">
           <div class="job-info">
@@ -246,7 +253,7 @@
           </div>
           <div class="job-right">
             <span class="badge ${cls}">${label}${prog}</span>
-            ${j.chat_url && j.chat_url.startsWith("codex://") ? `<a class="btn subtle" href="${escapeHtml(j.chat_url)}">在 Codex 打开</a>` : ""}
+            ${chatBtnHtml}
             ${canRead ? `<button class="btn subtle" data-open-job="${escapeHtml(j.recording_id)}" type="button">阅读</button>` : ""}
             ${j.status === "failed" ? `<button class="btn subtle" data-retry-job="${escapeHtml(j.recording_id)}" type="button">重试</button>` : ""}
           </div>
@@ -254,6 +261,14 @@
       `;
     }).join("");
 
+    box.querySelectorAll("[data-open-chat]").forEach((b) => {
+      b.addEventListener("click", async () => {
+        try {
+          const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(b.dataset.openChat)}/open-chat`, { method: "POST", body: {} });
+          showToast(res.message || "已在桌面端打开对话");
+        } catch (e) { showToast(e.message, true); }
+      });
+    });
     box.querySelectorAll("[data-open-job]").forEach((b) => {
       b.addEventListener("click", () => openJobDrawer(b.dataset.openJob).catch((e) => showToast(e.message, true)));
     });
@@ -348,9 +363,9 @@
       el.hidden = !trShow.includes(el.dataset.trField);
     });
     const anShow = {
-      "antigravity-agentapi": [],
-      "codex-cli": ["model", "open_desktop_chat"],
-      "claude-cli": ["model"],
+      "antigravity-agentapi": ["rotation"],
+      "codex-cli": ["rotation", "model", "open_desktop_chat"],
+      "claude-cli": ["rotation", "model", "open_desktop_chat"],
       "none": [],
       "openai-compatible-llm": ["base_url", "model", "api_key"],
       "gemini-llm": ["base_url", "model", "api_key"],
@@ -372,9 +387,9 @@
       $("#cfgAnBaseUrl").placeholder = "https://api.deepseek.com/v1";
       $("#cfgAnModel").placeholder = "deepseek-chat";
     } else if (an === "codex-cli") {
-      $("#cfgAnModel").placeholder = "留空使用本机 Codex 默认模型";
+      $("#cfgAnModel").placeholder = "留空使用本机 Codex 桌面版默认模型";
     } else if (an === "claude-cli") {
-      $("#cfgAnModel").placeholder = "留空使用本机 Claude Code 默认模型";
+      $("#cfgAnModel").placeholder = "留空使用本机 Claude 桌面版默认模型";
     }
     const warn = $("#comboWarning");
     if (tr === "antigravity-flash" && ["openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli"].includes(an)) {
@@ -422,11 +437,9 @@
     if (an === "openai-compatible-llm" || an === "gemini-llm") {
       if ($("#cfgAnBaseUrl").value.trim()) anObj.base_url = $("#cfgAnBaseUrl").value.trim();
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
-    } else if (an === "codex-cli") {
+    } else if (an === "codex-cli" || an === "claude-cli") {
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
       anObj.open_desktop_chat = $("#cfgAnOpenDesktopChat").checked;
-    } else if (an === "claude-cli") {
-      if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
     }
     return { trObj, anObj, secretsPatch };
   }
@@ -446,6 +459,9 @@
     $("#cfgTrCommand").value = Array.isArray(trCmd) ? trCmd.join(" ") : (trCmd || "");
     $("#cfgTrMode").value = (c.transcriber && c.transcriber.mode) || "full_audio";
     $("#cfgAnalyzer").value = (c.analyzer && c.analyzer.auto_provider) || "antigravity-agentapi";
+    if ($("#cfgRotation")) {
+      $("#cfgRotation").value = c.rotation || "per_recording";
+    }
     $("#cfgAnBaseUrl").value = (c.analyzer && c.analyzer.base_url) || "";
     $("#cfgAnModel").value = (c.analyzer && c.analyzer.model) || "";
     if ($("#cfgAnOpenDesktopChat")) {
@@ -472,6 +488,7 @@
         method: "PUT",
         body: {
           output_dir: $("#cfgOutputDir").value.trim(),
+          rotation: $("#cfgRotation") ? $("#cfgRotation").value : "per_recording",
           sources: { drop_folder_dir: $("#cfgDropDir").value.trim() },
           preprocessor: { mode: $("#cfgPreprocessor").value },
           transcriber: trObj,
