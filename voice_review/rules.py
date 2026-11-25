@@ -1,0 +1,279 @@
+"""显化规则库（Rule Studio）：明文提示词模板、专有名词词表、个人背景与透明 Prompt 拼装。"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import re
+
+from voice_review.agent_bridge import format_duration_cn
+
+TEMPLATE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
+BUILTIN_TEMPLATE_IDS = ("general_review", "meeting_minutes", "sales_communication", "solo_memo")
+
+
+@dataclass(frozen=True)
+class PromptTemplate:
+    id: str
+    name: str
+    description: str
+    body: str
+    is_default: bool
+    is_builtin: bool
+    path: Path
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "body": self.body,
+            "is_default": self.is_default,
+            "is_builtin": self.is_builtin,
+            "path": str(self.path),
+        }
+
+
+def validate_template_id(template_id: str) -> str:
+    clean = (template_id or "").strip()
+    if not TEMPLATE_ID_RE.fullmatch(clean):
+        raise ValueError("模板 ID 仅支持小写字母、数字、短横线与下划线（长度 1～48）")
+    return clean
+
+
+def _parse_template_markdown(text: str, *, fallback_id: str) -> tuple[dict[str, str], str]:
+    content = (text or "").replace("\r\n", "\n")
+    meta: dict[str, str] = {"id": fallback_id, "name": fallback_id, "description": "", "default": "false"}
+    if content.startswith("---\n"):
+        end = content.find("\n---\n", 4)
+        if end != -1:
+            header = content[4:end]
+            body = content[end + 5 :].lstrip("\n")
+            for line in header.splitlines():
+                if ":" not in line:
+                    continue
+                k, v = line.split(":", 1)
+                key = k.strip().lower()
+                val = v.strip().strip('"').strip("'")
+                if key:
+                    meta[key] = val
+            return meta, body.strip()
+    return meta, content.strip()
+
+
+def _serialize_template_markdown(*, template_id: str, name: str, description: str, body: str, is_default: bool) -> str:
+    safe_name = (name or template_id).replace("\n", " ").strip()
+    safe_desc = (description or "").replace("\n", " ").strip()
+    flag = "true" if is_default else "false"
+    return (
+        "---\n"
+        f"id: {template_id}\n"
+        f"name: {safe_name}\n"
+        f"description: {safe_desc}\n"
+        f"default: {flag}\n"
+        "---\n"
+        f"{(body or '').strip()}\n"
+    )
+
+
+class RuleStudio:
+    """管理用户目录下完全透明、可编辑的复盘规则（模板 + 词表 + 可选背景）。"""
+
+    def __init__(self, rules_dir: Path, builtin_templates_dir: Path | None = None) -> None:
+        self.rules_dir = Path(rules_dir).expanduser().resolve()
+        self.templates_dir = self.rules_dir / "templates"
+        self.glossary_path = self.rules_dir / "glossary.txt"
+        self.persona_path = self.rules_dir / "persona.md"
+        pkg_root = Path(__file__).resolve().parent.parent
+        self.builtin_templates_dir = (
+            Path(builtin_templates_dir).expanduser().resolve()
+            if builtin_templates_dir is not None
+            else (pkg_root / "templates").resolve()
+        )
+
+    def ensure_initialized(self) -> None:
+        self.templates_dir.mkdir(parents=True, exist_ok=True)
+        marker = self.rules_dir / ".initialized"
+        if not marker.exists():
+            for tid in BUILTIN_TEMPLATE_IDS:
+                src = self.builtin_templates_dir / f"{tid}.md"
+                dst = self.templates_dir / f"{tid}.md"
+                if src.is_file() and not dst.is_file():
+                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            marker.write_text("1\n", encoding="utf-8")
+        if not self.glossary_path.exists():
+            self.glossary_path.write_text("", encoding="utf-8")
+        if not self.persona_path.exists():
+            self.persona_path.write_text("", encoding="utf-8")
+
+    def _load_file(self, path: Path) -> PromptTemplate:
+        tid = path.stem
+        meta, body = _parse_template_markdown(path.read_text(encoding="utf-8"), fallback_id=tid)
+        resolved_id = meta.get("id") or tid
+        is_default = meta.get("default", "").lower() in ("true", "1", "yes")
+        is_builtin = (self.builtin_templates_dir / f"{resolved_id}.md").is_file()
+        return PromptTemplate(
+            id=resolved_id,
+            name=meta.get("name") or resolved_id,
+            description=meta.get("description") or "",
+            body=body,
+            is_default=is_default,
+            is_builtin=is_builtin,
+            path=path,
+        )
+
+    def list_templates(self) -> list[PromptTemplate]:
+        self.ensure_initialized()
+        items: list[PromptTemplate] = []
+        for p in sorted(self.templates_dir.glob("*.md")):
+            if p.is_file():
+                items.append(self._load_file(p))
+        items.sort(key=lambda t: (0 if t.is_default else 1, 0 if t.is_builtin else 1, t.id))
+        return items
+
+    def get_template(self, template_id: str | None = None) -> PromptTemplate:
+        self.ensure_initialized()
+        if template_id:
+            clean = validate_template_id(template_id)
+            p = self.templates_dir / f"{clean}.md"
+            if p.is_file():
+                return self._load_file(p)
+            raise FileNotFoundError(f"未找到分析模板：{clean}")
+        items = self.list_templates()
+        for t in items:
+            if t.is_default:
+                return t
+        for t in items:
+            if t.id == "general_review":
+                return t
+        if items:
+            return items[0]
+        raise FileNotFoundError("规则目录中没有任何可用模板")
+
+    def save_template(
+        self,
+        template_id: str,
+        *,
+        name: str,
+        description: str,
+        body: str,
+        is_default: bool = False,
+    ) -> PromptTemplate:
+        clean = validate_template_id(template_id)
+        self.ensure_initialized()
+        if is_default:
+            for existing in self.list_templates():
+                if existing.id != clean and existing.is_default:
+                    existing.path.write_text(
+                        _serialize_template_markdown(
+                            template_id=existing.id,
+                            name=existing.name,
+                            description=existing.description,
+                            body=existing.body,
+                            is_default=False,
+                        ),
+                        encoding="utf-8",
+                    )
+        target = self.templates_dir / f"{clean}.md"
+        target.write_text(
+            _serialize_template_markdown(
+                template_id=clean,
+                name=name,
+                description=description,
+                body=body,
+                is_default=is_default,
+            ),
+            encoding="utf-8",
+        )
+        return self._load_file(target)
+
+    def delete_template(self, template_id: str) -> bool:
+        clean = validate_template_id(template_id)
+        target = self.templates_dir / f"{clean}.md"
+        if not target.is_file():
+            return False
+        was_default = self._load_file(target).is_default
+        target.unlink()
+        if was_default:
+            fallback = self.templates_dir / "general_review.md"
+            if fallback.is_file():
+                tpl = self._load_file(fallback)
+                self.save_template(
+                    tpl.id,
+                    name=tpl.name,
+                    description=tpl.description,
+                    body=tpl.body,
+                    is_default=True,
+                )
+        return True
+
+    def reset_builtin_template(self, template_id: str) -> PromptTemplate:
+        clean = validate_template_id(template_id)
+        src = self.builtin_templates_dir / f"{clean}.md"
+        if not src.is_file():
+            raise FileNotFoundError(f"模板 {clean} 不是内置模板，无法重置")
+        self.ensure_initialized()
+        dst = self.templates_dir / f"{clean}.md"
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        return self._load_file(dst)
+
+    def get_glossary(self) -> str:
+        self.ensure_initialized()
+        try:
+            return self.glossary_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def save_glossary(self, text: str) -> None:
+        self.ensure_initialized()
+        self.glossary_path.write_text((text or "").strip() + ("\n" if (text or "").strip() else ""), encoding="utf-8")
+
+    def get_persona(self) -> str:
+        self.ensure_initialized()
+        try:
+            return self.persona_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return ""
+
+    def save_persona(self, text: str) -> None:
+        self.ensure_initialized()
+        self.persona_path.write_text((text or "").strip() + ("\n" if (text or "").strip() else ""), encoding="utf-8")
+
+    def compose_analysis_prompt(
+        self,
+        *,
+        template_id: str | None = None,
+        title: str,
+        recorded_at: str,
+        duration_sec: float,
+        speakers_summary: str,
+        transcript_text: str | None = None,
+        transcript_path: Path | None = None,
+        analysis_path: Path | None = None,
+    ) -> str:
+        """透明拼装最终发送给分析模型的完整 Prompt（所有引擎与 UI 预览共用同一口径）。"""
+        tpl = self.get_template(template_id)
+        persona = self.get_persona()
+        dur_text = format_duration_cn(duration_sec)
+        parts: list[str] = [
+            "## 录音元数据",
+            f"- **录制时间**：{recorded_at}",
+            f"- **标题**：{title}",
+            f"- **音频时长**：{dur_text}",
+            f"- **选用分析模板**：{tpl.name} (`{tpl.id}`)",
+            "- **声纹与说话人概况**：",
+            speakers_summary.strip() if speakers_summary.strip() else "未识别到已注册声纹",
+        ]
+        if transcript_path is not None:
+            parts.append(f"- **完整转录稿路径**：`{Path(transcript_path).resolve()}`")
+        if analysis_path is not None:
+            parts.append(f"- **目标复盘分析稿路径**：`{Path(analysis_path).resolve()}`")
+
+        if persona:
+            parts.extend(["", "## 用户背景说明", persona])
+
+        parts.extend(["", f"## 分析规则（模板：{tpl.name}）", tpl.body])
+
+        if transcript_text is not None:
+            parts.extend(["", "## 完整转录稿正文", transcript_text.strip()])
+
+        return "\n".join(parts).strip() + "\n"

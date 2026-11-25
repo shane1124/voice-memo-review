@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 自动解析真实脚本所在目录（兼容软链 ~/.local/bin/vmr）
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+
+find_python() {
+  for cand in \
+    "${VMR_PYTHON:-}" \
+    "$SCRIPT_DIR/python/bin/python3" \
+    "/opt/homebrew/bin/python3.13" \
+    "/opt/homebrew/bin/python3.12" \
+    "/opt/homebrew/bin/python3.11" \
+    "/opt/homebrew/bin/python3" \
+    "/usr/local/bin/python3" \
+    "$(command -v python3 2>/dev/null || true)"; do
+    [ -n "$cand" ] && [ -x "$cand" ] || continue
+    if "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+      echo "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+PY_BIN="$(find_python || true)"
+if [ -z "$PY_BIN" ]; then
+  echo "❌ 未检测到 Python 3.11+（macOS 系统自带 /usr/bin/python3 通常为 3.9，缺少 tomllib）。请先安装 Python 3.11+。" >&2
+  exit 1
+fi
+
+export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PY_BIN" -P -m voice_review.cli "$@"

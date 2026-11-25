@@ -1,0 +1,65 @@
+# voice-memo-review 可插拔四插槽配置示例
+# 敏感 API Key 严禁写在本文件中，统一由 `vmr ui` 或 `secrets.json`（权限 0600）隔离管理
+
+output_dir = "~/Documents/VoiceMemoReview"
+default_template_id = "general_review"
+min_duration_sec = 10
+debounce_sec = 12
+analysis_timeout_sec = 900
+
+# Antigravity 对话设置（仅当选用 antigravity-* 插槽时生效）
+model = "gemini-4-neon-xhigh"
+conversation_title = "语音复盘助手"
+rotation = "weekly"  # weekly | daily | per_recording | single
+
+# 插槽 1：音频输入源（可同时开启，不依赖 iCloud 也能用投放文件夹）
+[sources]
+voice_memos_enabled = true
+recordings_dir = "~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
+drop_folder_enabled = true
+drop_folder_dir = "~/Desktop/语音复盘投放箱"
+drop_folder_archive_done = false
+
+# 插槽 2：本地预处理
+[preprocessor]
+mode = "fluidaudio"   # fluidaudio（10MB 本地声纹切段） | none（关闭声纹，均匀切块）
+uniform_chunk_sec = 600
+
+# 插槽 3：可插拔转写引擎
+[transcriber]
+provider = "antigravity-flash"  # antigravity-flash | gemini-api | openai-compatible-asr | command-asr
+# gemini-api 示例：
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+# model = "gemini-2.5-flash"
+# openai-compatible-asr 示例（兼容 OpenAI / Groq / SiliconFlow / 本地 whisper.cpp）：
+# base_url = "https://api.openai.com/v1"
+# model = "whisper-1"
+# command-asr 示例（整轨一次调用并回贴声纹）：
+# mode = "full_audio"
+# command = ["whisper-cli", "-m", "ggml-large-v3.bin", "-f", "{audio}", "-oj"]
+
+# 插槽 4：后台自动分析引擎（MCP 对话内始终由当前宿主 AI 分析）
+[analyzer]
+auto_provider = "antigravity-agentapi"  # antigravity-agentapi | openai-compatible-llm | gemini-llm | none
+# openai-compatible-llm 示例（兼容 DeepSeek / OpenAI / Kimi / 通义 / Ollama）：
+# base_url = "https://api.deepseek.com/v1"
+# model = "deepseek-chat"
+# gemini-llm 示例：
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+# model = "gemini-2.5-pro"
+
+[v2]
+pad_before_sec = 0.25
+pad_after_sec = 0.15
+batch_max_segments = 15
+batch_max_speech_sec = 120
+mp3_bitrate = "32k"
+max_concurrency = 25
+agent_timeout_sec = 120
+stagger_sec = 0.25
+
+[update]
+repo = "shane1124/voice-memo-review"
+
+[ui]
+port = 18765

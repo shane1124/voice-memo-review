@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice Memo Review · 语音复盘工作台</title>
+  <link rel="stylesheet" href="/assets/style.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+        <div>
+          <div class="brand-title">语音复盘</div>
+          <div class="brand-sub" id="appVersion">v1.0.0</div>
+        </div>
+      </div>
+
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item active" data-view="workbench">工作台</button>
+        <button class="nav-item" data-view="providers">引擎插槽</button>
+        <button class="nav-item" data-view="rules">规则工作室</button>
+        <button class="nav-item" data-view="integrations">AI 插件</button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="daemon-pill">
+          <span class="dot" id="daemonDot"></span>
+          <span id="daemonLabel">连接本地守护中</span>
+        </div>
+        <div class="engine-mini" id="engineMini">转写：- / 分析：-</div>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+      <!-- 视图 1：工作台 -->
+      <section class="view active" id="view-workbench">
+        <header class="view-head">
+          <div>
+            <h1>工作台</h1>
+            <p class="muted">拖入任意录音立即转写分析，或开启后台自动监听。</p>
+          </div>
+          <div class="head-actions">
+            <label class="toggle-chip">
+              <input type="checkbox" id="toggleVoiceMemos" />
+              <span>苹果语音备忘录</span>
+            </label>
+            <label class="toggle-chip">
+              <input type="checkbox" id="toggleDropFolder" />
+              <span>投放文件夹</span>
+            </label>
+          </div>
+        </header>
+
+        <div class="drop-bar" id="dropZone">
+          <input type="file" id="fileInput" accept=".m4a,.mp3,.wav,.flac,.ogg,.aac,.mp4,.webm,.opus" hidden />
+          <div class="drop-copy">
+            <strong>把录音拖到这里，或点击选择音频文件</strong>
+            <span class="muted">支持 m4a / mp3 / wav / flac / mp4，文件全程只留在你本机处理</span>
+          </div>
+          <div class="drop-controls">
+            <select id="uploadTemplateSelect" aria-label="选用分析模板"></select>
+            <button class="btn primary" id="pickFileBtn" type="button">选择录音</button>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>任务队列与产出</h2>
+            <button class="btn ghost" id="refreshJobsBtn" type="button">刷新列表</button>
+          </div>
+          <div id="jobsList" class="jobs-list">
+            <div class="empty-state">暂无处理记录，拖入一条录音试试看。</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图 2：引擎插槽 -->
+      <section class="view" id="view-providers">
+        <header class="view-head">
+          <div>
+            <h1>引擎插槽</h1>
+            <p class="muted">自由组合预处理、转写引擎与分析模型；密钥独立存放在 0600 权限 secrets.json 中。</p>
+          </div>
+          <button class="btn primary" id="saveProvidersBtn" type="button">保存配置</button>
+        </header>
+
+        <div class="combo-warning" id="comboWarning" hidden></div>
+
+        <div class="grid-two">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>音频来源与输出目录</h2>
+            </div>
+            <div class="form-stack">
+              <label class="field">
+                <span>分析稿输出目录</span>
+                <input type="text" id="cfgOutputDir" placeholder="~/Documents/VoiceMemoReview" />
+              </label>
+              <label class="field">
+                <span>自定义投放文件夹（免 iCloud）</span>
+                <input type="text" id="cfgDropDir" placeholder="~/Desktop/语音复盘投放箱" />
+              </label>
+              <label class="field">
+                <span>本地预处理模式</span>
+                <select id="cfgPreprocessor">
+                  <option value="fluidaudio">FluidAudio 本地声纹分离 + 物理切段（推荐）</option>
+                  <option value="none">关闭声纹分离（均匀切块，通用跨平台）</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2>转写插槽（Transcriber）</h2>
+              <button class="btn ghost" id="testTranscriberBtn" type="button">测试连通</button>
+            </div>
+            <div class="form-stack">
+              <label class="field">
+                <span>选择转写引擎</span>
+                <select id="cfgTranscriber">
+                  <option value="antigravity-flash">Antigravity Flash（内置零 Key，含语气标注）</option>
+                  <option value="gemini-api">Gemini API（直连多模态，含语气标注）</option>
+                  <option value="openai-compatible-asr">OpenAI 兼容 ASR（Whisper / Groq / SiliconFlow / 本地服务）</option>
+                  <option value="command-asr">自定义命令行（整轨 JSON 回贴声纹，适配国内云/本地 CLI）</option>
+                </select>
+              </label>
+              <label class="field" data-tr-field="base_url">
+                <span>Base URL</span>
+                <input type="text" id="cfgTrBaseUrl" placeholder="https://api.openai.com/v1" />
+              </label>
+              <label class="field" data-tr-field="model">
+                <span>模型名称</span>
+                <input type="text" id="cfgTrModel" placeholder="gemini-2.5-flash / whisper-1" />
+              </label>
+              <label class="field" data-tr-field="api_key">
+                <span>API Key（留空或保持掩码则不覆盖原值）</span>
+                <input type="password" id="cfgTrApiKey" placeholder="sk-... / AIza..." autocomplete="off" />
+              </label>
+              <label class="field" data-tr-field="command">
+                <span>命令行模板（空格分隔，支持 {audio} {lang} {glossary}）</span>
+                <input type="text" id="cfgTrCommand" placeholder="whisper-cli -m model.bin -f {audio} -oj" />
+              </label>
+              <label class="field" data-tr-field="mode">
+                <span>命令调用粒度</span>
+                <select id="cfgTrMode">
+                  <option value="full_audio">整条音频一次调用（推荐，自动对齐声纹）</option>
+                  <option value="segment">按物理切段逐条调用</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>后台自动分析插槽（Analyzer）</h2>
+            <button class="btn ghost" id="testAnalyzerBtn" type="button">测试连通</button>
+          </div>
+          <p class="muted small-note">提示：通过 MCP 在 Antigravity / Claude Code / Codex 中对话复盘时，默认直接使用当前宿主 AI 分析，不受下方后台分析器限制。</p>
+          <div class="grid-two">
+            <label class="field">
+              <span>选择后台自动分析引擎</span>
+              <select id="cfgAnalyzer">
+                <option value="antigravity-agentapi">Antigravity 后台投递（与 antigravity-flash 一体化免费）</option>
+                <option value="openai-compatible-llm">OpenAI 兼容大模型（DeepSeek / OpenAI / Kimi / Ollama）</option>
+                <option value="gemini-llm">Gemini API 大模型（百万上下文直读）</option>
+                <option value="none">仅自动转写，等待手动或 MCP 接手分析</option>
+              </select>
+            </label>
+            <label class="field" data-an-field="base_url">
+              <span>分析模型 Base URL</span>
+              <input type="text" id="cfgAnBaseUrl" placeholder="https://api.deepseek.com/v1" />
+            </label>
+            <label class="field" data-an-field="model">
+              <span>分析模型名称</span>
+              <input type="text" id="cfgAnModel" placeholder="deepseek-chat / gemini-2.5-pro" />
+            </label>
+            <label class="field" data-an-field="api_key">
+              <span>分析模型 API Key（留空或掩码不覆盖）</span>
+              <input type="password" id="cfgAnApiKey" placeholder="sk-... / AIza..." autocomplete="off" />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图 3：规则工作室 -->
+      <section class="view" id="view-rules">
+        <header class="view-head">
+          <div>
+            <h1>规则工作室</h1>
+            <p class="muted">所有分析提示词、专有名词词表与声纹名册完全明文显化，随时编辑与预览。</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn ghost" id="newTemplateBtn" type="button">新建模板</button>
+            <button class="btn ghost" id="previewPromptBtn" type="button">预览完整 Prompt</button>
+            <button class="btn primary" id="saveTemplateBtn" type="button">保存模板</button>
+          </div>
+        </header>
+
+        <div class="rules-layout">
+          <div class="panel tpl-sidebar">
+            <div class="panel-head"><h2>分析模板</h2></div>
+            <div id="templateList" class="tpl-list"></div>
+          </div>
+
+          <div class="panel tpl-editor">
+            <div class="grid-two">
+              <label class="field">
+                <span>模板 ID（小写字母/数字/下划线）</span>
+                <input type="text" id="tplId" placeholder="general_review" />
+              </label>
+              <label class="field">
+                <span>显示名称</span>
+                <input type="text" id="tplName" placeholder="通用对话复盘" />
+              </label>
+            </div>
+            <label class="field">
+              <span>适用场景说明</span>
+              <input type="text" id="tplDesc" placeholder="简述该模板适合什么类型的对话或会议" />
+            </label>
+            <label class="field">
+              <span>分析提示词正文（完全明文，直接发给分析模型）</span>
+              <textarea id="tplBody" rows="13" spellcheck="false"></textarea>
+            </label>
+            <div class="editor-footer">
+              <label class="toggle-chip">
+                <input type="checkbox" id="tplDefault" />
+                <span>设为默认分析模板</span>
+              </label>
+              <div class="head-actions">
+                <button class="btn ghost" id="resetTemplateBtn" type="button">恢复内置默认</button>
+                <button class="btn danger-ghost" id="deleteTemplateBtn" type="button">删除模板</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid-two">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>专有名词词表 &amp; 个人背景（可选）</h2>
+              <button class="btn ghost" id="saveMetaRulesBtn" type="button">保存词表与背景</button>
+            </div>
+            <div class="form-stack">
+              <label class="field">
+                <span>高频专有名词（人名、产品名、缩写，空格或换行分隔，辅助转写校对）</span>
+                <textarea id="rulesGlossary" rows="3" placeholder="例如：SaaS SLA 飞书 OKR"></textarea>
+              </label>
+              <label class="field">
+                <span>个人角色与关注重点（默认留空，填写后会透明注入分析 Prompt）</span>
+                <textarea id="rulesPersona" rows="3" placeholder="例如：我是售前解决方案架构师，重点关注技术可行性与交付边界"></textarea>
+              </label>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2>本地声纹名册</h2>
+            </div>
+            <div class="vp-upload-row">
+              <input type="text" id="vpNameInput" placeholder="说话人姓名（如：我 / 张三）" />
+              <input type="file" id="vpFileInput" accept=".m4a,.mp3,.wav,.flac" hidden />
+              <button class="btn ghost" id="vpUploadBtn" type="button">上传 10~30s 样音录入</button>
+            </div>
+            <div id="voiceprintList" class="vp-list"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 视图 4：AI 插件与更新 -->
+      <section class="view" id="view-integrations">
+        <header class="view-head">
+          <div>
+            <h1>AI 插件与版本更新</h1>
+            <p class="muted">一键将本机 MCP Server 与通用 Skill 接入常用 AI 客户端，并从公开 GitHub 仓库检查更新。</p>
+          </div>
+          <button class="btn primary" id="installAllClientsBtn" type="button">一键接入全部已检测 AI</button>
+        </header>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>已支持的 AI 客户端</h2>
+            <button class="btn ghost" id="refreshIntegrationsBtn" type="button">重新扫描</button>
+          </div>
+          <div id="clientsGrid" class="clients-grid"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head">
+            <h2>版本与自动更新</h2>
+            <div class="head-actions">
+              <button class="btn ghost" id="checkUpdateBtn" type="button">检查 GitHub 新版本</button>
+              <button class="btn primary" id="applyUpdateBtn" type="button" hidden>立即更新</button>
+            </div>
+          </div>
+          <div id="updateStatus" class="update-box">当前运行版本：<strong id="updateCurrentVer">v1.0.0</strong>（更新源：<code id="updateRepoLabel">shane1124/voice-memo-review</code>）</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 右侧阅读与预览抽屉 -->
+  <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+  <aside class="drawer" id="readerDrawer" hidden aria-label="文档阅读器">
+    <div class="drawer-head">
+      <div>
+        <h2 id="drawerTitle">复盘阅读</h2>
+        <div class="drawer-tabs" id="drawerTabs">
+          <button class="tab active" data-tab="analysis">分析稿</button>
+          <button class="tab" data-tab="transcript">转录稿</button>
+        </div>
+      </div>
+      <div class="head-actions">
+        <button class="btn ghost" id="drawerReanalyzeBtn" type="button" hidden>用当前模板分析</button>
+        <button class="btn ghost" id="drawerCopyBtn" type="button">复制全文</button>
+        <button class="btn ghost" id="drawerCloseBtn" type="button">关闭</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="drawerContent"></div>
+  </aside>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>
