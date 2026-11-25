@@ -3,16 +3,27 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
+import hashlib
 import json
 from pathlib import Path
+import plistlib
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 
-from voice_review.agent_bridge import AgentBridge, compute_dynamic_timeout_sec, render_v2_review_prompt
+from voice_review.agent_bridge import (
+    AgentBridge,
+    compute_dynamic_timeout_sec,
+    render_v2_review_prompt,
+    resolve_bucket,
+)
 from voice_review.config import VoiceReviewConfig
 from voice_review.rules import RuleStudio
 from voice_review.secrets import SecretStore
@@ -44,6 +55,7 @@ class AnalysisOutcome:
     analysis_path: Path | None
     prompt_preview: str = ""
     error: str = ""
+    chat_url: str = ""
 
 
 def chunk_text_for_summary(text: str, *, max_chars: int = DEFAULT_MAX_CHUNK_CHARS) -> list[str]:
@@ -352,20 +364,87 @@ def _resolve_cli_binary(bin_spec: str) -> str | None:
     return shutil.which(raw)
 
 
+def _extract_codex_thread_id(stdout_text: str) -> str:
+    for line in (stdout_text or "").splitlines():
+        s = line.strip()
+        if not s or not s.startswith("{"):
+            continue
+        try:
+            ev = json.loads(s)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(ev, dict) and ev.get("type") == "thread.started":
+            raw_id = str(ev.get("thread_id") or "").strip()
+            try:
+                return str(uuid.UUID(raw_id))
+            except ValueError:
+                continue
+    return ""
+
+
+def _write_codex_webloc(output_dir: Path, *, recorded_at: str, title: str, recording_id: str, chat_url: str) -> Path | None:
+    try:
+        links_dir = output_dir / "录音对话"
+        links_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            dt = datetime.fromisoformat(recorded_at).astimezone()
+            stamp = dt.strftime("%Y-%m-%d %H%M%S")
+        except Exception:
+            stamp = datetime.now().strftime("%Y-%m-%d %H%M%S")
+        safe_title = re.sub(r'[\\/:*?"<>|\n\r]+', "_", (title or "录音分析").strip())[:36].strip("_") or "录音分析"
+        short_key = hashlib.sha256(recording_id.encode("utf-8")).hexdigest()[:8]
+        target = links_dir / f"{stamp} {safe_title} · {short_key}.webloc"
+        data = plistlib.dumps({"URL": chat_url})
+        tmp = target.with_suffix(".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(target)
+        return target
+    except Exception:
+        return None
+
+
+def _open_codex_desktop_url(chat_url: str) -> bool:
+    if sys.platform != "darwin" or not chat_url.startswith("codex://"):
+        return False
+    open_bin = "/usr/bin/open"
+    if not Path(open_bin).is_file():
+        return False
+    try:
+        res = subprocess.run(
+            [open_bin, "-b", "com.openai.codex", chat_url],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 class CodexCliAnalyzer(AnalyzerProvider):
-    """免 API Key：直接调用本机已登录的 Codex CLI（codex exec）按显化模板自动生成复盘。"""
+    """免 API Key：直接调用本机已登录 Codex CLI（codex exec）自动分析，并支持按策略分对话及自动打开桌面 Codex 对话。"""
 
     provider_id = "codex-cli"
 
-    def __init__(self, cfg: VoiceReviewConfig, rules: RuleStudio) -> None:
+    def __init__(self, cfg: VoiceReviewConfig, rules: RuleStudio, store: StateStore | None = None) -> None:
         self.cfg = cfg
         self.rules = rules
+        self.store = store
         st = cfg.analyzer_settings
         self.model = str(st.get("model") or "").strip()
         self.max_chunk_chars = max(10_000, int(st.get("max_chunk_chars", DEFAULT_MAX_CHUNK_CHARS)))
         self.timeout_sec = max(60, int(st.get("timeout_sec", 420)))
+        self.open_desktop_chat = bool(st.get("open_desktop_chat", True))
 
-    def _run_codex(self, prompt: str, *, work_cwd: Path) -> str:
+    def _run_codex(
+        self,
+        prompt: str,
+        *,
+        work_cwd: Path,
+        ephemeral: bool = False,
+        resume_thread_id: str = "",
+    ) -> tuple[str, str]:
         exe = _resolve_cli_binary(self.cfg.codex_bin)
         if not exe:
             raise RuntimeError(
@@ -387,6 +466,12 @@ class CodexCliAnalyzer(AnalyzerProvider):
         ]
         if self.model:
             cmd += ["-m", self.model]
+        if ephemeral:
+            cmd.append("--ephemeral")
+        else:
+            cmd.append("--json")
+            if resume_thread_id:
+                cmd += ["resume", resume_thread_id]
         cmd.append("-")
         try:
             proc = subprocess.run(
@@ -398,14 +483,18 @@ class CodexCliAnalyzer(AnalyzerProvider):
                 check=False,
             )
             text = out_file.read_text(encoding="utf-8").strip() if out_file.is_file() else ""
+            tid = "" if ephemeral else (_extract_codex_thread_id(proc.stdout) or resume_thread_id)
             if proc.returncode != 0 and not text:
+                # 若旧分桶会话被删导致 resume 失败，自动自愈重开新对话重试一次
+                if resume_thread_id and not ephemeral:
+                    return self._run_codex(prompt, work_cwd=work_cwd, ephemeral=False, resume_thread_id="")
                 detail = (proc.stderr or proc.stdout or "").strip()[-320:]
                 raise RuntimeError(f"Codex CLI 分析失败（exit={proc.returncode}）：{detail}")
-            if not text:
+            if not text and ephemeral:
                 text = (proc.stdout or "").strip()
             if not text:
                 raise RuntimeError("Codex CLI 返回空分析内容")
-            return text
+            return text, tid
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"Codex CLI 分析超时（{self.timeout_sec}s）") from exc
         finally:
@@ -417,13 +506,23 @@ class CodexCliAnalyzer(AnalyzerProvider):
         except OSError as exc:
             return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=f"读取转录稿失败：{exc}")
         chunks = chunk_text_for_summary(transcript_text, max_chars=self.max_chunk_chars)
-        header = (
+        stamp_short = (req.recorded_at or "")[:16].replace("T", " ")
+        lead = (
+            f"请分析 {stamp_short} 的录音《{req.title}》。"
+            f"后续追问可直接查阅原始转录稿：`{req.transcript_path.resolve()}`。\n\n"
             "你是一位严谨、客观的中文录音分析专家。"
-            "请直接输出最终完整的 Markdown 复盘正文（不要输出执行过程旁白，也不要尝试修改本地文件）。\n\n"
+            "请直接输出最终完整的 Markdown 分析正文（不要输出执行过程旁白，也不要尝试修改本地文件）。\n\n"
         )
+
+        # 按配置 rotation 策略决定独立对话还是按天/按周/单窗续聊
+        bucket, _ = resolve_bucket(self.cfg, req.recorded_at)
+        meta_key = f"codex_{bucket}" if bucket else None
+        prev_tid = (self.store.get_meta(meta_key) or "") if (self.store is not None and meta_key) else ""
+
+        thread_id = ""
         try:
             if len(chunks) <= 1:
-                prompt = header + self.rules.compose_analysis_prompt(
+                prompt = lead + self.rules.compose_analysis_prompt(
                     template_id=req.template_id or self.cfg.default_template_id,
                     title=req.title,
                     recorded_at=req.recorded_at,
@@ -432,19 +531,25 @@ class CodexCliAnalyzer(AnalyzerProvider):
                     transcript_text=transcript_text,
                     extra_sections=req.extra_prompt_sections,
                 )
-                result_md = self._run_codex(prompt, work_cwd=self.cfg.output_dir)
+                result_md, thread_id = self._run_codex(
+                    prompt,
+                    work_cwd=self.cfg.output_dir,
+                    ephemeral=False,
+                    resume_thread_id=prev_tid,
+                )
             else:
                 partials: list[str] = []
                 for idx, chunk in enumerate(chunks, 1):
                     sub_prompt = (
-                        header
+                        "你是一位严谨、客观的中文录音分析专家。请直接输出高密度要点，不要多余旁白。\n\n"
                         + f"这是超长录音《{req.title}》的第 {idx}/{len(chunks)} 段转录稿。"
                         "请高密度提炼本段核心事实、关键数字、人物承诺、争议分歧与情绪波动（保留原话 `[HH:MM:SS]` 时间戳），"
                         "不要遗漏关键业务信息：\n\n"
                         + chunk
                     )
-                    partials.append(f"### 分段提炼 {idx}/{len(chunks)}\n" + self._run_codex(sub_prompt, work_cwd=self.cfg.output_dir))
-                final_prompt = header + self.rules.compose_analysis_prompt(
+                    sub_md, _ = self._run_codex(sub_prompt, work_cwd=self.cfg.output_dir, ephemeral=True)
+                    partials.append(f"### 分段提炼 {idx}/{len(chunks)}\n" + sub_md)
+                final_prompt = lead + self.rules.compose_analysis_prompt(
                     template_id=req.template_id or self.cfg.default_template_id,
                     title=req.title,
                     recorded_at=req.recorded_at,
@@ -453,13 +558,34 @@ class CodexCliAnalyzer(AnalyzerProvider):
                     transcript_text="\n\n".join(partials),
                     extra_sections=req.extra_prompt_sections,
                 )
-                result_md = self._run_codex(final_prompt, work_cwd=self.cfg.output_dir)
+                result_md, thread_id = self._run_codex(
+                    final_prompt,
+                    work_cwd=self.cfg.output_dir,
+                    ephemeral=False,
+                    resume_thread_id=prev_tid,
+                )
         except Exception as exc:
             return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=str(exc))
 
         req.analysis_path.parent.mkdir(parents=True, exist_ok=True)
         req.analysis_path.write_text(result_md.rstrip() + "\n", encoding="utf-8")
-        return AnalysisOutcome(ok=True, status="done", analysis_path=req.analysis_path)
+
+        chat_url = ""
+        if thread_id:
+            if self.store is not None and meta_key:
+                self.store.set_meta(meta_key, thread_id)
+            chat_url = f"codex://threads/{thread_id}"
+            _write_codex_webloc(
+                self.cfg.output_dir,
+                recorded_at=req.recorded_at,
+                title=req.title,
+                recording_id=req.recording_id,
+                chat_url=chat_url,
+            )
+            if self.open_desktop_chat:
+                _open_codex_desktop_url(chat_url)
+
+        return AnalysisOutcome(ok=True, status="done", analysis_path=req.analysis_path, chat_url=chat_url)
 
 
 class ClaudeCliAnalyzer(AnalyzerProvider):
@@ -568,7 +694,7 @@ def get_analyzer(
     if pid == "antigravity-agentapi":
         return AntigravityAgentAnalyzer(cfg, store, rules)
     if pid == "codex-cli":
-        return CodexCliAnalyzer(cfg, rules)
+        return CodexCliAnalyzer(cfg, rules, store=store)
     if pid == "claude-cli":
         return ClaudeCliAnalyzer(cfg, rules)
     if pid == "openai-compatible-llm":

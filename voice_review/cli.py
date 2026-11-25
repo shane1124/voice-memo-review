@@ -5,6 +5,7 @@ import argparse
 from datetime import datetime
 import json
 import logging
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -37,9 +38,36 @@ def _setup_logging(verbose: bool = False) -> None:
     )
 
 
+def _probe_voice_memos_access(recordings_dir: Path) -> tuple[bool, str]:
+    if not recordings_dir.is_dir():
+        return False, f"目录不存在：{recordings_dir}"
+    try:
+        os.listdir(recordings_dir)
+        return True, f"可读：{recordings_dir}（自动同步需已开启 iCloud 且空间充足）"
+    except PermissionError:
+        real_py = os.path.realpath(sys.executable)
+        return (
+            False,
+            f"无读取权限（系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 点＋按 ⌘⇧G 粘贴并勾选：{real_py}）",
+        )
+    except OSError as exc:
+        return False, f"访问异常：{exc}"
+
+
+def _detect_local_asr_tools() -> list[str]:
+    found: list[str] = []
+    for name in ("whisper-cli", "whisper", "mlx-qwen3-asr"):
+        hit = shutil.which(name)
+        if hit:
+            found.append(f"{name} ({hit})")
+    return found
+
+
 def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
     ok_combo, combo_msg = validate_provider_combo(cfg.transcriber_provider, cfg.analyzer_auto_provider)
     autostart_st = AutostartManager.default(cfg.vmr_home).status()
+    vm_ok, vm_detail = _probe_voice_memos_access(cfg.recordings_dir)
+    local_asrs = _detect_local_asr_tools()
     checks = [
         ("ffmpeg", shutil.which(cfg.ffmpeg_bin) is not None or Path(cfg.ffmpeg_bin).is_file(), cfg.ffmpeg_bin),
         ("ffprobe", shutil.which(cfg.ffprobe_bin) is not None or Path(cfg.ffprobe_bin).is_file(), cfg.ffprobe_bin),
@@ -47,13 +75,16 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
         ("Antigravity agentapi", cfg.agentapi_bin.is_file(), str(cfg.agentapi_bin)),
         ("Codex CLI（免 Key 分析）", shutil.which(cfg.codex_bin) is not None or Path(cfg.codex_bin).is_file(), cfg.codex_bin),
         ("Claude Code CLI（免 Key 分析）", shutil.which(cfg.claude_bin) is not None or Path(cfg.claude_bin).is_file(), cfg.claude_bin),
-        ("苹果语音备忘录目录", cfg.recordings_dir.is_dir(), str(cfg.recordings_dir)),
+        ("苹果语音备忘录读取权限", vm_ok, vm_detail),
         ("开机后台自启（launchd）", autostart_st.enabled, ("已开启" + (" · 运行托管中" if autostart_st.loaded else " · 下次开机生效")) if autostart_st.enabled else "未开启（可用 vmr autostart on 开启）"),
         ("插槽组合校验", ok_combo, f"{cfg.transcriber_provider} + {cfg.analyzer_auto_provider} ({combo_msg})"),
     ]
     all_ok = True
     print(f"=== voice-memo-review v{__version__} 环境体检 ===")
     print(f"  数据目录：{cfg.vmr_home}")
+    print(f"  Python 真实路径（完全磁盘访问权限授权对象）：{os.path.realpath(sys.executable)}")
+    if local_asrs:
+        print(f"  本机已检出离线转写 CLI：{', '.join(local_asrs)}")
     for name, ok, detail in checks:
         mark = "✅" if ok else "❌"
         print(f"  {mark} {name:<28} {detail}")

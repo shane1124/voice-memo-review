@@ -157,6 +157,7 @@ def _tool_defs() -> list[dict[str, Any]]:
                     "analyzer_auto_provider": {"type": "string", "description": "可选：antigravity-agentapi / codex-cli / claude-cli / openai-compatible-llm / gemini-llm / none"},
                     "analyzer_base_url": {"type": "string"},
                     "analyzer_model": {"type": "string"},
+                    "codex_open_desktop_chat": {"type": "boolean", "description": "可选（codex-cli 生效）：分析完成后自动在 Codex 桌面端打开带正文的对话窗口（默认 true）"},
                     "voice_memos_enabled": {"type": "boolean"},
                     "drop_folder_enabled": {"type": "boolean"},
                     "drop_folder_dir": {"type": "string"},
@@ -313,7 +314,9 @@ class McpStdioServer:
                 merged["transcriber"] = t_obj
                 patch_for_daemon["transcriber"] = t_obj
 
-            if "analyzer_auto_provider" in args or any(k in args for k in ("analyzer_base_url", "analyzer_model")):
+            if "analyzer_auto_provider" in args or any(
+                k in args for k in ("analyzer_base_url", "analyzer_model", "codex_open_desktop_chat")
+            ):
                 new_a_prov = str(args.get("analyzer_auto_provider") or self.cfg.analyzer_auto_provider).strip().lower()
                 same_a = new_a_prov == self.cfg.analyzer_auto_provider
                 a_obj: dict[str, Any] = dict(self.cfg.analyzer_settings) if same_a else {}
@@ -322,6 +325,8 @@ class McpStdioServer:
                     a_obj["base_url"] = str(args["analyzer_base_url"]).strip()
                 if args.get("analyzer_model") is not None:
                     a_obj["model"] = str(args["analyzer_model"]).strip()
+                if args.get("codex_open_desktop_chat") is not None and new_a_prov == "codex-cli":
+                    a_obj["open_desktop_chat"] = bool(args["codex_open_desktop_chat"])
                 merged["analyzer"] = a_obj
                 patch_for_daemon["analyzer"] = a_obj
 

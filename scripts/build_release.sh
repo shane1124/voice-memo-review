@@ -74,7 +74,8 @@ if [ -n "$STATIC_FFPROBE_BIN" ] && [ -x "$STATIC_FFPROBE_BIN" ]; then
   echo "✅ 已打入静态 ffprobe（$(du -sh "$STAGE_DIR/bin/ffprobe" | awk '{print $1}')）"
 fi
 
-(cd "$DIST_DIR" && tar -czf "$ARCHIVE_NAME" "$STAGE_NAME" && shasum -a 256 "$ARCHIVE_NAME" > SHA256SUMS)
+(cd "$DIST_DIR" && COPYFILE_DISABLE=1 tar --no-xattrs -czf "$ARCHIVE_NAME" "$STAGE_NAME" 2>/dev/null || COPYFILE_DISABLE=1 tar -czf "$ARCHIVE_NAME" "$STAGE_NAME")
+(cd "$DIST_DIR" && shasum -a 256 "$ARCHIVE_NAME" > SHA256SUMS)
 rm -rf "$STAGE_DIR"
 
 echo ""

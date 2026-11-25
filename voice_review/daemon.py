@@ -16,6 +16,7 @@ import secrets as py_secrets
 import select
 import shutil
 import signal
+import sys
 import tempfile
 import threading
 import time
@@ -55,6 +56,16 @@ from voice_review.voice_memos import SHANGHAI_TZ, probe_duration_sec, sanitize_f
 logger = logging.getLogger(__name__)
 WEB_UI_DIR = Path(__file__).resolve().parent / "web_ui"
 _ALLOWED_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+class _QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """过滤浏览器切页/刷新导致的良性连接断开堆栈，保持后台日志清爽。"""
+
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
 
 
 class DaemonAlreadyRunningError(RuntimeError):
@@ -351,10 +362,11 @@ class PipelineExecutor:
                 recording_id,
                 status=outcome.status,
                 analysis_path=final_analysis_path,
+                chat_url=outcome.chat_url or None,
                 last_error="",
                 reset_retry=True,
             )
-            self._emit("job", {"recording_id": recording_id, "status": outcome.status})
+            self._emit("job", {"recording_id": recording_id, "status": outcome.status, "chat_url": outcome.chat_url})
             if outcome.status == "done" and final_analysis_path:
                 self.extensions.run_after_analysis(
                     {
@@ -1380,9 +1392,9 @@ class VmrDaemon:
             self._stop_event.clear()
             handler_cls = self._make_handler()
             try:
-                self._httpd = ThreadingHTTPServer((self.host, self._requested_port), handler_cls)
+                self._httpd = _QuietThreadingHTTPServer((self.host, self._requested_port), handler_cls)
             except OSError:
-                self._httpd = ThreadingHTTPServer((self.host, 0), handler_cls)
+                self._httpd = _QuietThreadingHTTPServer((self.host, 0), handler_cls)
             self._httpd.daemon_threads = True
             self.port = int(self._httpd.server_address[1])
             self._write_daemon_info()

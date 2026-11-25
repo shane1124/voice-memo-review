@@ -246,6 +246,7 @@
           </div>
           <div class="job-right">
             <span class="badge ${cls}">${label}${prog}</span>
+            ${j.chat_url && j.chat_url.startsWith("codex://") ? `<a class="btn subtle" href="${escapeHtml(j.chat_url)}">在 Codex 打开</a>` : ""}
             ${canRead ? `<button class="btn subtle" data-open-job="${escapeHtml(j.recording_id)}" type="button">阅读</button>` : ""}
             ${j.status === "failed" ? `<button class="btn subtle" data-retry-job="${escapeHtml(j.recording_id)}" type="button">重试</button>` : ""}
           </div>
@@ -348,7 +349,7 @@
     });
     const anShow = {
       "antigravity-agentapi": [],
-      "codex-cli": ["model"],
+      "codex-cli": ["model", "open_desktop_chat"],
       "claude-cli": ["model"],
       "none": [],
       "openai-compatible-llm": ["base_url", "model", "api_key"],
@@ -421,7 +422,10 @@
     if (an === "openai-compatible-llm" || an === "gemini-llm") {
       if ($("#cfgAnBaseUrl").value.trim()) anObj.base_url = $("#cfgAnBaseUrl").value.trim();
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
-    } else if (an === "codex-cli" || an === "claude-cli") {
+    } else if (an === "codex-cli") {
+      if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
+      anObj.open_desktop_chat = $("#cfgAnOpenDesktopChat").checked;
+    } else if (an === "claude-cli") {
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
     }
     return { trObj, anObj, secretsPatch };
@@ -444,6 +448,9 @@
     $("#cfgAnalyzer").value = (c.analyzer && c.analyzer.auto_provider) || "antigravity-agentapi";
     $("#cfgAnBaseUrl").value = (c.analyzer && c.analyzer.base_url) || "";
     $("#cfgAnModel").value = (c.analyzer && c.analyzer.model) || "";
+    if ($("#cfgAnOpenDesktopChat")) {
+      $("#cfgAnOpenDesktopChat").checked = !(c.analyzer && c.analyzer.open_desktop_chat === false);
+    }
     $("#updateRepoLabel").textContent = (c.update && c.update.repo) || "shane1124/voice-memo-review";
     refreshProviderFieldVisibility();
     syncSecretInputsForSelectedProviders();

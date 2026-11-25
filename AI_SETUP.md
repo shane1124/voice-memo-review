@@ -64,7 +64,7 @@
 
 > **3. 用什么 Agent / 模型分析？** *(按本机已装 AI 动态推荐，提前点破联动规则)*
 > - *(若第 2 题选 1 `Antigravity Flash`，主动提示两者一体化免费联动，标为【本机推荐】)* **1. Antigravity 后台自动分析**（与 `Antigravity Flash` 免 Key 联动；平时仍可在 Codex / Claude 新对话用 MCP 读稿深挖或重分析）
-> - *(若第 2 题选 2/3/4 独立转写，且本机已装 Codex CLI 或 Claude Code CLI，优先标【本机推荐】)* **2. 本机 Codex CLI（`codex-cli`）或 Claude Code CLI（`claude-cli`）**（免 API Key，直接复用你本机已登录账号完成后台自动分析）
+> - *(若第 2 题选 2/3/4 独立转写，且本机已装 Codex CLI 或 Claude Code CLI，优先标【本机推荐】)* **2. 本机 Codex CLI（`codex-cli`）或 Claude Code CLI（`claude-cli`）**（免 API Key 复用本机账号；选 **Codex CLI** 时，分析写完后不仅保存 Markdown，还会**原生按你设的对话频率自动续聊或新开对话，并直接弹开带完整正文的 Codex 桌面对话窗口**，无需手动按发送即可继续追问！）
 > - **3. 外部大模型 API**（DeepSeek / OpenAI / Gemini / 本地 Ollama）
 > - **4. 仅自动转写，需要分析时再到聊天里叫我分析**
 
@@ -92,6 +92,7 @@
    - 若用户直接口述了偏好，调用 `vmr_update_profile` 与 `vmr_save_template` 立即落盘；若用户回「先用内置示例」，则保留默认通用示例。
 3. **收尾核验并给出 3 句开箱指令**：
    - 运行 `~/.local/bin/vmr doctor` 确认全绿；
+   - **macOS 苹果语音备忘录完全磁盘访问权限一步到位指引**：若用户选了 ①「苹果语音备忘录」且 `vmr doctor` 报「苹果语音备忘录读取权限 ❌」，**直接把 `vmr doctor` 输出的 `Python 真实路径`（如 `/opt/homebrew/Cellar/python@3.13/.../bin/python3.13`，切勿误导用户只加 `Python.app`！）** 发给用户，引导他去「系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 点＋按 ⌘⇧G 粘贴路径 → 开启开关」，完成后重启后台守护并再次 `vmr doctor` 核实变绿！
    - 提醒用户新开一条对话即可调用 13 个 MCP 工具，并给出 3 句顺手示例：
      - 「看看我今天最新那条录音，按我的专属模板整理重点」
      - 「帮我把默认分析模板里加上『风险与待确认』一节，并把新项目词加进词表」

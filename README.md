@@ -21,7 +21,7 @@
   - 更推荐安装完直接让你的 AI 结合你平时的工作场景（口述或经你授权扫描工作目录）为你量身生成一套专属分析模板与易错词表，所有规则 100% 明文存放在本机「规则工作室」，随时可改可预览。
 - **四插槽全可插拔，支持免 Key 调用本机 AI 客户端**：
   - **转写插槽**：Antigravity Flash（零 Key 含语气标注）/ Gemini API（直连含语气）/ OpenAI 兼容 ASR（Whisper / Groq / SiliconFlow / 本地 Whisper 服务）/ 自定义命令行 ASR（支持整轨或逐段，5 分钟接本地 Qwen3-ASR / whisper.cpp / 火山豆包 / 阿里云）。
-  - **后台自动分析插槽**：**Antigravity（免 Key 一体化）**、**Codex CLI（`codex-cli`，免 Key 直接用本机 Codex 账号）**、**Claude Code CLI（`claude-cli`，免 Key 直接用本机 Claude 账号）**、DeepSeek / OpenAI / Ollama / Gemini API，或留待 MCP 对话接手。
+  - **后台自动分析插槽**：**Antigravity（免 Key 一体化）**、**Codex CLI（`codex-cli`，免 Key 直接复用本机账号，支持按天/周/单条分对话并在分析写完后自动弹开带正文的 Codex 桌面窗口直接追问）**、**Claude Code CLI（`claude-cli`，免 Key 直接用本机 Claude 账号）**、DeepSeek / OpenAI / Ollama / Gemini API，或留待 MCP 对话接手。
 - **macOS 开机后台自启 + 无感安全热更新**：
   - 一键 `vmr autostart on` 或控制台开关开启标准 `launchd` 后台常驻（开机自启、关终端不掉线、崩溃自动拉起）。
   - 守护进程每 24 小时带 `ETag` 静默检查一次 GitHub 新版本；有新版时在控制台顶部横幅与 AI 对话里温和提醒；点击「一键更新并重启」或运行 `vmr update` 自动避开正在转写的录音，校验 `SHA256SUMS` 原子替换并自动无感重启刷新页面。

@@ -33,6 +33,7 @@ class RecordingState:
     batch_count: int = 0
     segment_count: int = 0
     auto_analyze: bool = True
+    chat_url: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -57,6 +58,7 @@ class RecordingState:
             "progress_total": self.progress_total,
             "batch_count": self.batch_count,
             "segment_count": self.segment_count,
+            "chat_url": self.chat_url,
         }
 
 
@@ -72,6 +74,7 @@ _EXTRA_COLUMNS: tuple[tuple[str, str], ...] = (
     ("batch_count", "INTEGER DEFAULT 0"),
     ("segment_count", "INTEGER DEFAULT 0"),
     ("auto_analyze", "INTEGER DEFAULT 1"),
+    ("chat_url", "TEXT DEFAULT ''"),
 )
 
 _RETRY_BACKOFFS = (30.0, 120.0, 300.0)
@@ -152,6 +155,7 @@ class StateStore:
             batch_count=int(row["batch_count"] or 0) if "batch_count" in keys else 0,
             segment_count=int(row["segment_count"] or 0) if "segment_count" in keys else 0,
             auto_analyze=bool(row["auto_analyze"]) if ("auto_analyze" in keys and row["auto_analyze"] is not None) else True,
+            chat_url=str(row["chat_url"] or "") if "chat_url" in keys else "",
         )
 
     def get(self, recording_id: str) -> RecordingState | None:
@@ -210,6 +214,7 @@ class StateStore:
         template_id: str | None = None,
         batch_count: int | None = None,
         segment_count: int | None = None,
+        chat_url: str | None = None,
         reset_retry: bool = False,
     ) -> None:
         fields = ["status = ?", "updated_at = ?"]
@@ -223,6 +228,7 @@ class StateStore:
             "template_id": template_id,
             "batch_count": batch_count,
             "segment_count": segment_count,
+            "chat_url": chat_url,
         }
         for col, val in optional.items():
             if val is not None:

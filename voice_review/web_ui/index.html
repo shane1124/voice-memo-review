@@ -17,7 +17,7 @@
           </svg>
         </span>
         <span class="brand-name">录音自动分析</span>
-        <span class="brand-ver" id="appVersion">v1.3.2</span>
+        <span class="brand-ver" id="appVersion">v1.4.0</span>
       </div>
 
       <nav class="nav" aria-label="主导航">
@@ -248,6 +248,12 @@
                   <input type="text" id="cfgAnModel" placeholder="deepseek-chat / gemini-2.5-pro" />
                 </label>
               </div>
+              <div class="setting-row" data-an-field="open_desktop_chat" hidden>
+                <label class="switch-pill">
+                  <input type="checkbox" id="cfgAnOpenDesktopChat" checked />
+                  <span>分析完成后自动在 Codex 桌面端打开带正文的对话窗口（支持按轮换策略续聊追问）</span>
+                </label>
+              </div>
               <div class="setting-row" data-an-field="api_key" hidden>
                 <label class="field">
                   <span>API Key（留空或保持掩码则保留原密钥）</span>
@@ -396,7 +402,7 @@
             </div>
             <div class="settings-card">
               <div class="setting-row update-row" id="updateStatus">
-                当前运行版本 <strong id="updateCurrentVer">v1.3.2</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>（守护每 24 小时静默检查一次）
+                当前运行版本 <strong id="updateCurrentVer">v1.4.0</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>（守护每 24 小时静默检查一次）
               </div>
             </div>
           </div>
