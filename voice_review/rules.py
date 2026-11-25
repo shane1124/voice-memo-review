@@ -10,6 +10,41 @@ from voice_review.agent_bridge import format_duration_cn
 TEMPLATE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 BUILTIN_TEMPLATE_IDS = ("general_review", "meeting_minutes", "sales_communication", "solo_memo")
 
+DEFAULT_GLOSSARY_GUIDE = (
+    "# 高频专有名词词表（以 # 开头的说明行会自动忽略，不会污染转写）\n"
+    "# 用法：在下方直接填写容易被语音转错的人名、公司名、产品名或行业缩写（空格或换行分隔）\n"
+    "# 示例：SaaS ARR OKR 飞书 客户成功\n"
+)
+
+DEFAULT_PERSONA_GUIDE = (
+    "<!--\n"
+    "个人角色与关注重点（本段注释不会注入 Prompt，在注释外直接填写你的真实信息即可）\n"
+    "提示：你也可以在 Codex / Claude Code / Antigravity 对话里直接口述，让 AI 帮你自动写进来。\n"
+    "\n"
+    "参考写法（直接写在下方）：\n"
+    "- 我的身份：例如 业务负责人 / 产品经理 / 独立顾问 / 创业者\n"
+    "- 录音中我的称呼：例如 我（与本地声纹名称保持一致）\n"
+    "- 最关注什么：例如 客户真实需求与预算、报价锚点、团队交付风险、沟通表达节奏\n"
+    "- 偏好的复盘风格：例如 直给结论、少客套、优先点出没接稳的地方和更高杠杆的解法\n"
+    "-->\n"
+)
+
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+
+def _strip_glossary_comments(text: str) -> str:
+    lines = [
+        line.strip()
+        for line in (text or "").replace("\r\n", "\n").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    return "\n".join(lines).strip()
+
+
+def _strip_persona_comments(text: str) -> str:
+    cleaned = _HTML_COMMENT_RE.sub("", (text or "").replace("\r\n", "\n"))
+    return cleaned.strip()
+
 
 @dataclass(frozen=True)
 class PromptTemplate:
@@ -101,9 +136,9 @@ class RuleStudio:
                     dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
             marker.write_text("1\n", encoding="utf-8")
         if not self.glossary_path.exists():
-            self.glossary_path.write_text("", encoding="utf-8")
+            self.glossary_path.write_text(DEFAULT_GLOSSARY_GUIDE, encoding="utf-8")
         if not self.persona_path.exists():
-            self.persona_path.write_text("", encoding="utf-8")
+            self.persona_path.write_text(DEFAULT_PERSONA_GUIDE, encoding="utf-8")
 
     def _load_file(self, path: Path) -> PromptTemplate:
         tid = path.stem
@@ -216,10 +251,11 @@ class RuleStudio:
         dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
         return self._load_file(dst)
 
-    def get_glossary(self) -> str:
+    def get_glossary(self, *, raw: bool = False) -> str:
         self.ensure_initialized()
         try:
-            return self.glossary_path.read_text(encoding="utf-8").strip()
+            content = self.glossary_path.read_text(encoding="utf-8")
+            return content.strip() if raw else _strip_glossary_comments(content)
         except OSError:
             return ""
 
@@ -227,10 +263,11 @@ class RuleStudio:
         self.ensure_initialized()
         self.glossary_path.write_text((text or "").strip() + ("\n" if (text or "").strip() else ""), encoding="utf-8")
 
-    def get_persona(self) -> str:
+    def get_persona(self, *, raw: bool = False) -> str:
         self.ensure_initialized()
         try:
-            return self.persona_path.read_text(encoding="utf-8").strip()
+            content = self.persona_path.read_text(encoding="utf-8")
+            return content.strip() if raw else _strip_persona_comments(content)
         except OSError:
             return ""
 

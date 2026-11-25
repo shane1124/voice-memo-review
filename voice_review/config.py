@@ -22,7 +22,14 @@ DEFAULT_UPDATE_REPO = "shane1124/voice-memo-review"
 
 VALID_PREPROCESSORS = ("fluidaudio", "none")
 VALID_TRANSCRIBERS = ("antigravity-flash", "gemini-api", "openai-compatible-asr", "command-asr")
-VALID_ANALYZERS = ("antigravity-agentapi", "openai-compatible-llm", "gemini-llm", "none")
+VALID_ANALYZERS = (
+    "antigravity-agentapi",
+    "codex-cli",
+    "claude-cli",
+    "openai-compatible-llm",
+    "gemini-llm",
+    "none",
+)
 
 
 def default_vmr_home() -> Path:
@@ -50,7 +57,7 @@ def _find_bin(raw: str, fallback_name: str) -> str:
     found = shutil.which(fallback_name)
     if found:
         return found
-    for prefix in ("/opt/homebrew/bin", "/usr/local/bin"):
+    for prefix in ("/opt/homebrew/bin", "/usr/local/bin", str(Path.home() / ".local" / "bin")):
         cand = Path(prefix) / fallback_name
         if cand.is_file():
             return str(cand)
@@ -91,10 +98,10 @@ def validate_provider_combo(transcriber: str, analyzer_auto: str) -> tuple[bool,
         return False, f"不支持的转写引擎：{t}（可选：{', '.join(VALID_TRANSCRIBERS)}）"
     if a not in VALID_ANALYZERS:
         return False, f"不支持的后台分析引擎：{a}（可选：{', '.join(VALID_ANALYZERS)}）"
-    if t == "antigravity-flash" and a in ("openai-compatible-llm", "gemini-llm"):
+    if t == "antigravity-flash" and a in ("openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli"):
         return (
             False,
-            "转写引擎 antigravity-flash 依赖 Antigravity 一体化工作流，不能直接搭配外部 LLM 分析器；"
+            "转写引擎 antigravity-flash 依赖 Antigravity 一体化工作流，不能直接搭配独立分析引擎（如 Codex / Claude / 外部 API）；"
             "请将后台分析器设为 antigravity-agentapi，或将转写引擎切换为 gemini-api / openai-compatible-asr / command-asr。",
         )
     return True, "组合有效"
@@ -178,6 +185,8 @@ class VoiceReviewConfig:
     default_template_id: str = "general_review"
     update_repo: str = DEFAULT_UPDATE_REPO
     ui_port: int = 18765
+    codex_bin: str = "codex"
+    claude_bin: str = "claude"
 
 
 def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None) -> VoiceReviewConfig:
@@ -277,6 +286,8 @@ def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None
         default_template_id=str(raw.get("default_template_id", "general_review")).strip() or "general_review",
         update_repo=str(upd_raw.get("repo", DEFAULT_UPDATE_REPO)).strip() or DEFAULT_UPDATE_REPO,
         ui_port=int(ui_raw.get("port", 18765)),
+        codex_bin=_find_bin(str(raw.get("codex_bin", "")), "codex"),
+        claude_bin=_find_bin(str(raw.get("claude_bin", "")), "claude"),
     )
 
 
@@ -302,6 +313,8 @@ def config_to_dict(cfg: VoiceReviewConfig) -> dict[str, Any]:
         "ffmpeg_bin": cfg.ffmpeg_bin,
         "ffprobe_bin": cfg.ffprobe_bin,
         "agentapi_bin": str(cfg.agentapi_bin),
+        "codex_bin": cfg.codex_bin,
+        "claude_bin": cfg.claude_bin,
         "sources": {
             "voice_memos_enabled": cfg.voice_memos_enabled,
             "recordings_dir": str(cfg.recordings_dir),

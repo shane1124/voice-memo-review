@@ -309,7 +309,12 @@ class ClientInstaller:
         _atomic_write_text(cfg_path, json.dumps(data, ensure_ascii=False, indent=2) + "\n")
         if skill_dst is not None:
             _copy_skill(self.skill_source_dir, skill_dst)
-        return InstallResult(client, True, f"已写入 MCP 配置与 Skill（已备份原文件为 {cfg_path.name}.bak）", str(cfg_path))
+        return InstallResult(
+            client,
+            True,
+            f"已写入 MCP 配置与 Skill（已备份原文件为 {cfg_path.name}.bak）；首次接入请新开对话或重启客户端生效",
+            str(cfg_path),
+        )
 
     def _uninstall_json_mcp(self, client: str, cfg_path: Path, skill_dst: Path | None) -> InstallResult:
         if cfg_path.is_file():
@@ -343,7 +348,12 @@ class ClientInstaller:
         final_text = (cleaned.rstrip() + "\n\n" + block) if cleaned.strip() else block
         _atomic_write_text(cfg_path, final_text)
         _copy_skill(self.skill_source_dir, skill_dst)
-        return InstallResult("codex", True, f"已写入 Codex TOML 受管区块与 Skill（已备份 {cfg_path.name}.bak）", str(cfg_path))
+        return InstallResult(
+            "codex",
+            True,
+            f"已写入 Codex TOML 受管区块与 Skill（已备份 {cfg_path.name}.bak）；请新开 Codex 对话或重启客户端使 MCP 工具生效",
+            str(cfg_path),
+        )
 
     def _uninstall_codex(self) -> InstallResult:
         cfg_path = self._paths()["codex"]["config"]

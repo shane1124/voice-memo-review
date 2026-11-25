@@ -3,13 +3,20 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from typing import Any, TextIO
 import urllib.request
 
 from voice_review import __version__
-from voice_review.config import VoiceReviewConfig, config_to_dict
+from voice_review.config import (
+    VoiceReviewConfig,
+    config_to_dict,
+    load_config,
+    save_config_dict,
+    validate_provider_combo,
+)
 from voice_review.daemon import PipelineExecutor, discover_running_daemon
 from voice_review.diarizer import FluidAudioDiarizer, VoiceprintStore
 from voice_review.rules import RuleStudio
@@ -118,6 +125,43 @@ def _tool_defs() -> list[dict[str, Any]]:
                 "required": ["action"],
             },
         },
+        {
+            "name": "vmr_get_profile",
+            "description": "读取当前用户背景（persona.md）、高频专有名词词表（glossary.txt）、默认模板及脱敏四插槽配置，便于引导个性化定制。",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "vmr_update_profile",
+            "description": "根据用户口述更新个人角色与关注重点（persona.md）、专有名词词表（glossary.txt）或切换默认分析模板。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "persona": {"type": "string", "description": "可选：完整写入个人背景与复盘关注重点（Markdown）"},
+                    "glossary": {"type": "string", "description": "可选：完整写入专有名词校对词表（空格或换行分隔）"},
+                    "default_template_id": {"type": "string", "description": "可选：将指定模板 ID 设为默认分析模板"},
+                },
+            },
+        },
+        {
+            "name": "vmr_update_settings",
+            "description": "更新四插槽非敏感配置（转写引擎、后台自动分析引擎如 codex-cli/claude-cli/antigravity-agentapi/none、以及苹果语音备忘录/投放文件夹监听开关），保存后自动通知本机守护进程热重载。不含 API Key。",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "transcriber_provider": {"type": "string", "description": "可选：antigravity-flash / gemini-api / openai-compatible-asr / command-asr"},
+                    "transcriber_base_url": {"type": "string"},
+                    "transcriber_model": {"type": "string"},
+                    "transcriber_command": {"type": "string"},
+                    "transcriber_mode": {"type": "string", "enum": ["full_audio", "segment"]},
+                    "analyzer_auto_provider": {"type": "string", "description": "可选：antigravity-agentapi / codex-cli / claude-cli / openai-compatible-llm / gemini-llm / none"},
+                    "analyzer_base_url": {"type": "string"},
+                    "analyzer_model": {"type": "string"},
+                    "voice_memos_enabled": {"type": "boolean"},
+                    "drop_folder_enabled": {"type": "boolean"},
+                    "drop_folder_dir": {"type": "string"},
+                },
+            },
+        },
     ]
 
 
@@ -167,9 +211,135 @@ class McpStdioServer:
                 "preprocessor_mode": self.cfg.preprocessor_mode,
                 "transcriber_provider": self.cfg.transcriber_provider,
                 "analyzer_auto_provider": self.cfg.analyzer_auto_provider,
+                "voice_memos_enabled": self.cfg.voice_memos_enabled,
+                "drop_folder_enabled": self.cfg.drop_folder_enabled,
                 "default_template": self.rules.get_template().id,
+                "persona_configured": bool(self.rules.get_persona()),
+                "glossary_configured": bool(self.rules.get_glossary()),
                 "fluidaudio_ready": self.cfg.fluidaudio_bin is not None,
+                "agentapi_ready": self.cfg.agentapi_bin.is_file(),
+                "codex_ready": bool(shutil.which(self.cfg.codex_bin) or Path(self.cfg.codex_bin).is_file()),
+                "claude_ready": bool(shutil.which(self.cfg.claude_bin) or Path(self.cfg.claude_bin).is_file()),
                 "recent_count": len(self.store.list_recent(limit=50)),
+            }, False
+
+        if name == "vmr_get_profile":
+            return {
+                "default_template": self.rules.get_template().to_dict(),
+                "persona_effective": self.rules.get_persona(),
+                "persona_raw": self.rules.get_persona(raw=True),
+                "glossary_effective": self.rules.get_glossary(),
+                "glossary_raw": self.rules.get_glossary(raw=True),
+                "config": config_to_dict(self.cfg),
+                "secrets_masked": self.secrets.masked_all(),
+            }, False
+
+        if name == "vmr_update_profile":
+            updated_fields: list[str] = []
+            if "persona" in args and args["persona"] is not None:
+                self.rules.save_persona(str(args["persona"]))
+                updated_fields.append("persona")
+            if "glossary" in args and args["glossary"] is not None:
+                self.rules.save_glossary(str(args["glossary"]))
+                updated_fields.append("glossary")
+            if args.get("default_template_id"):
+                tid = str(args["default_template_id"]).strip()
+                tpl = self.rules.get_template(tid)
+                self.rules.save_template(
+                    tpl.id,
+                    name=tpl.name,
+                    description=tpl.description,
+                    body=tpl.body,
+                    is_default=True,
+                )
+                updated_fields.append("default_template_id")
+            return {
+                "ok": True,
+                "updated": updated_fields,
+                "persona_effective": self.rules.get_persona(),
+                "glossary_effective": self.rules.get_glossary(),
+                "default_template": self.rules.get_template().id,
+            }, False
+
+        if name == "vmr_update_settings":
+            merged = config_to_dict(self.cfg)
+            patch_for_daemon: dict[str, Any] = {}
+
+            if "transcriber_provider" in args or any(
+                k in args for k in ("transcriber_base_url", "transcriber_model", "transcriber_command", "transcriber_mode")
+            ):
+                new_t_prov = str(args.get("transcriber_provider") or self.cfg.transcriber_provider).strip().lower()
+                same_t = new_t_prov == self.cfg.transcriber_provider
+                t_obj: dict[str, Any] = dict(self.cfg.transcriber_settings) if same_t else {}
+                t_obj["provider"] = new_t_prov
+                if args.get("transcriber_base_url") is not None:
+                    t_obj["base_url"] = str(args["transcriber_base_url"]).strip()
+                if args.get("transcriber_model") is not None:
+                    t_obj["model"] = str(args["transcriber_model"]).strip()
+                if args.get("transcriber_command") is not None:
+                    t_obj["command"] = str(args["transcriber_command"]).strip()
+                if args.get("transcriber_mode") is not None:
+                    t_obj["mode"] = str(args["transcriber_mode"]).strip()
+                merged["transcriber"] = t_obj
+                patch_for_daemon["transcriber"] = t_obj
+
+            if "analyzer_auto_provider" in args or any(k in args for k in ("analyzer_base_url", "analyzer_model")):
+                new_a_prov = str(args.get("analyzer_auto_provider") or self.cfg.analyzer_auto_provider).strip().lower()
+                same_a = new_a_prov == self.cfg.analyzer_auto_provider
+                a_obj: dict[str, Any] = dict(self.cfg.analyzer_settings) if same_a else {}
+                a_obj["auto_provider"] = new_a_prov
+                if args.get("analyzer_base_url") is not None:
+                    a_obj["base_url"] = str(args["analyzer_base_url"]).strip()
+                if args.get("analyzer_model") is not None:
+                    a_obj["model"] = str(args["analyzer_model"]).strip()
+                merged["analyzer"] = a_obj
+                patch_for_daemon["analyzer"] = a_obj
+
+            src_patch: dict[str, Any] = {}
+            if "voice_memos_enabled" in args and args["voice_memos_enabled"] is not None:
+                src_patch["voice_memos_enabled"] = bool(args["voice_memos_enabled"])
+            if "drop_folder_enabled" in args and args["drop_folder_enabled"] is not None:
+                src_patch["drop_folder_enabled"] = bool(args["drop_folder_enabled"])
+            if args.get("drop_folder_dir"):
+                src_patch["drop_folder_dir"] = str(args["drop_folder_dir"]).strip()
+            if src_patch:
+                merged.setdefault("sources", {}).update(src_patch)
+                patch_for_daemon["sources"] = src_patch
+
+            t_prov_final = str((merged.get("transcriber") or {}).get("provider") or self.cfg.transcriber_provider)
+            a_prov_final = str((merged.get("analyzer") or {}).get("auto_provider") or self.cfg.analyzer_auto_provider)
+            ok_combo, combo_msg = validate_provider_combo(t_prov_final, a_prov_final)
+            if not ok_combo:
+                return {"ok": False, "error": combo_msg}, True
+
+            cfg_target = self.cfg.config_path or (self.cfg.vmr_home / "config.toml")
+            save_config_dict(cfg_target, merged)
+            self.cfg = load_config(cfg_target, vmr_home=self.cfg.vmr_home)
+            self.executor.reload_config(self.cfg)
+
+            daemon_reloaded = False
+            info = discover_running_daemon(self.cfg.vmr_home)
+            if info is not None and patch_for_daemon:
+                try:
+                    req = urllib.request.Request(
+                        f"{info.base_url}/api/v1/config",
+                        data=json.dumps(patch_for_daemon, ensure_ascii=False).encode("utf-8"),
+                        headers={"Content-Type": "application/json", "X-VMR-Token": info.token},
+                        method="PUT",
+                    )
+                    with urllib.request.urlopen(req, timeout=3.0) as resp:
+                        daemon_reloaded = resp.status == 200
+                except Exception:
+                    daemon_reloaded = False
+
+            return {
+                "ok": True,
+                "config_path": str(cfg_target),
+                "transcriber_provider": self.cfg.transcriber_provider,
+                "analyzer_auto_provider": self.cfg.analyzer_auto_provider,
+                "voice_memos_enabled": self.cfg.voice_memos_enabled,
+                "drop_folder_enabled": self.cfg.drop_folder_enabled,
+                "daemon_reloaded": daemon_reloaded,
             }, False
 
         if name == "vmr_list_recordings":

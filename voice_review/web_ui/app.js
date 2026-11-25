@@ -322,6 +322,8 @@
     });
     const anShow = {
       "antigravity-agentapi": [],
+      "codex-cli": ["model"],
+      "claude-cli": ["model"],
       "none": [],
       "openai-compatible-llm": ["base_url", "model", "api_key"],
       "gemini-llm": ["base_url", "model", "api_key"],
@@ -342,11 +344,15 @@
     } else if (an === "openai-compatible-llm") {
       $("#cfgAnBaseUrl").placeholder = "https://api.deepseek.com/v1";
       $("#cfgAnModel").placeholder = "deepseek-chat";
+    } else if (an === "codex-cli") {
+      $("#cfgAnModel").placeholder = "留空使用本机 Codex 默认模型";
+    } else if (an === "claude-cli") {
+      $("#cfgAnModel").placeholder = "留空使用本机 Claude Code 默认模型";
     }
     const warn = $("#comboWarning");
-    if (tr === "antigravity-flash" && (an === "openai-compatible-llm" || an === "gemini-llm")) {
+    if (tr === "antigravity-flash" && ["openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli"].includes(an)) {
       warn.hidden = false;
-      warn.textContent = "组合不兼容：antigravity-flash 依赖 Antigravity 一体化工作流，不能直接搭配外部大模型分析器。请改用 antigravity-agentapi，或切换转写引擎。";
+      warn.textContent = "组合不兼容：antigravity-flash 依赖 Antigravity 一体化工作流，不能直接搭配独立分析引擎（Codex / Claude / 外部 API）。若想用 Codex 或 Claude 自动分析，请把转写引擎切为 Gemini API、OpenAI 兼容 ASR 或自定义本地命令行。";
     } else {
       warn.hidden = true;
     }
@@ -388,6 +394,8 @@
     const anObj = { auto_provider: an };
     if (an === "openai-compatible-llm" || an === "gemini-llm") {
       if ($("#cfgAnBaseUrl").value.trim()) anObj.base_url = $("#cfgAnBaseUrl").value.trim();
+      if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
+    } else if (an === "codex-cli" || an === "claude-cli") {
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
     }
     return { trObj, anObj, secretsPatch };
@@ -741,7 +749,7 @@
       b.addEventListener("click", async () => {
         try {
           await apiFetch("/api/v1/integrations/install", { method: "POST", body: { targets: [b.dataset.inst] } });
-          showToast(`已同步接入 ${b.dataset.inst}`);
+          showToast(`已同步接入 ${b.dataset.inst}（请新开对话或重启客户端生效）`);
           await loadIntegrations();
         } catch (e) { showToast(e.message, true); }
       });
@@ -761,7 +769,7 @@
   $("#installAllClientsBtn").addEventListener("click", async () => {
     try {
       await apiFetch("/api/v1/integrations/install", { method: "POST", body: {} });
-      showToast("已为所有已检测 AI 客户端同步 MCP 与 Skill");
+      showToast("已为所有已检测 AI 客户端同步 MCP 与 Skill（请新开对话或重启生效）");
       await loadIntegrations();
     } catch (e) { showToast(e.message, true); }
   });

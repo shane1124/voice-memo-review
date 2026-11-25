@@ -775,6 +775,8 @@ class VmrDaemon:
                             "fluidaudio_ready": cfg.fluidaudio_bin is not None,
                             "ffmpeg_ready": bool(shutil.which(cfg.ffmpeg_bin) or Path(cfg.ffmpeg_bin).is_file()),
                             "agentapi_ready": cfg.agentapi_bin.is_file(),
+                            "codex_ready": bool(shutil.which(cfg.codex_bin) or Path(cfg.codex_bin).is_file()),
+                            "claude_ready": bool(shutil.which(cfg.claude_bin) or Path(cfg.claude_bin).is_file()),
                         },
                     )
                     return
@@ -815,8 +817,8 @@ class VmrDaemon:
                     self._send_json(
                         200,
                         {
-                            "glossary": daemon.rules.get_glossary(),
-                            "persona": daemon.rules.get_persona(),
+                            "glossary": daemon.rules.get_glossary(raw=True),
+                            "persona": daemon.rules.get_persona(raw=True),
                         },
                     )
                     return

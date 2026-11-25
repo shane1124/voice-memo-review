@@ -19,7 +19,7 @@ mkdir -p "$STAGE_DIR/bin" "$STAGE_DIR/models" "$DIST_DIR"
 
 cp -R "$REPO_ROOT/voice_review" "$REPO_ROOT/templates" "$REPO_ROOT/skills" "$REPO_ROOT/prompts" "$STAGE_DIR/"
 find "$STAGE_DIR" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-cp "$REPO_ROOT/vmr" "$REPO_ROOT/config.example.toml" "$REPO_ROOT/LICENSE" "$REPO_ROOT/README.md" "$STAGE_DIR/"
+cp "$REPO_ROOT/vmr" "$REPO_ROOT/config.example.toml" "$REPO_ROOT/LICENSE" "$REPO_ROOT/README.md" "$REPO_ROOT/AI_SETUP.md" "$STAGE_DIR/"
 cp "$REPO_ROOT/scripts/install.sh" "$STAGE_DIR/install.sh"
 chmod +x "$STAGE_DIR/vmr" "$STAGE_DIR/install.sh"
 

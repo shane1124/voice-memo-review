@@ -40,7 +40,9 @@ provider = "antigravity-flash"  # antigravity-flash | gemini-api | openai-compat
 
 # 插槽 4：后台自动分析引擎（MCP 对话内始终由当前宿主 AI 分析）
 [analyzer]
-auto_provider = "antigravity-agentapi"  # antigravity-agentapi | openai-compatible-llm | gemini-llm | none
+auto_provider = "antigravity-agentapi"  # antigravity-agentapi | codex-cli | claude-cli | openai-compatible-llm | gemini-llm | none
+# codex-cli / claude-cli（免 API Key，直接复用本机已登录客户端，可选指定 model，留空走默认）：
+# model = ""
 # openai-compatible-llm 示例（兼容 DeepSeek / OpenAI / Kimi / 通义 / Ollama）：
 # base_url = "https://api.deepseek.com/v1"
 # model = "deepseek-chat"

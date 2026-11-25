@@ -17,7 +17,7 @@
           </svg>
         </span>
         <span class="brand-name">语音复盘</span>
-        <span class="brand-ver" id="appVersion">v1.0.1</span>
+        <span class="brand-ver" id="appVersion">v1.1.0</span>
       </div>
 
       <nav class="nav" aria-label="主导航">
@@ -207,16 +207,18 @@
               <div class="group-title">后台自动分析引擎</div>
               <button class="btn text-btn" id="testAnalyzerBtn" type="button">测试连通</button>
             </div>
-            <p class="group-desc">在 Antigravity / Claude Code / Codex 里通过 MCP 复盘时，默认直接使用当前对话 AI 分析。</p>
+            <p class="group-desc">支持免 Key 调用本机 AI 客户端自动分析；在 Codex / Claude Code / Antigravity 新对话里也可随时通过 MCP 读取并追问复盘。</p>
             <div class="settings-card">
               <div class="setting-row">
                 <label class="field">
                   <span>选择后台分析提供方</span>
                   <select id="cfgAnalyzer">
                     <option value="antigravity-agentapi">Antigravity 后台投递（与 antigravity-flash 一体化免费）</option>
+                    <option value="codex-cli">Codex CLI（免 Key，直接用本机已登录 Codex 账号）</option>
+                    <option value="claude-cli">Claude Code CLI（免 Key，直接用本机已登录 Claude 账号）</option>
                     <option value="openai-compatible-llm">OpenAI 兼容大模型（DeepSeek / OpenAI / Kimi / Ollama）</option>
                     <option value="gemini-llm">Gemini API 大模型（长上下文直读）</option>
-                    <option value="none">仅自动转写，留待手动或 MCP 接手分析</option>
+                    <option value="none">仅自动转写，留待手动或 MCP 对话接手分析</option>
                   </select>
                 </label>
               </div>
@@ -228,7 +230,7 @@
               </div>
               <div class="setting-row" data-an-field="model" hidden>
                 <label class="field">
-                  <span>模型名称</span>
+                  <span>模型名称（Codex / Claude CLI 留空则使用客户端默认模型）</span>
                   <input type="text" id="cfgAnModel" placeholder="deepseek-chat / gemini-2.5-pro" />
                 </label>
               </div>
@@ -309,14 +311,14 @@
             <div class="settings-card">
               <div class="setting-row">
                 <label class="field">
-                  <span>高频专有名词词表（人名、产品名、术语，空格或换行分隔，辅助转写校对）</span>
-                  <textarea id="rulesGlossary" rows="4" placeholder="例如：SaaS SLA 飞书 OKR"></textarea>
+                  <span>高频专有名词词表（以 # 开头的注释行自动忽略，下方填人名/产品名/行业词辅助转写校对）</span>
+                  <textarea id="rulesGlossary" rows="5" placeholder="例如：SaaS ARR OKR 飞书"></textarea>
                 </label>
               </div>
               <div class="setting-row">
                 <label class="field">
-                  <span>个人角色与关注重点（默认留空，填写后会透明注入到分析 Prompt 顶部）</span>
-                  <textarea id="rulesPersona" rows="5" placeholder="例如：我是产品负责人，重点关注交付风险、排期承诺与跨部门阻塞点"></textarea>
+                  <span>个人角色与关注重点（注释外的内容会自动透明注入分析 Prompt 顶部；也可直接在 AI 对话里口述让它代填）</span>
+                  <textarea id="rulesPersona" rows="8" placeholder="例如：我是业务负责人，重点关注客户真实诉求、报价锚点、交付风险与沟通节奏"></textarea>
                 </label>
               </div>
               <div class="setting-row right-align">
@@ -345,7 +347,7 @@
           <header class="page-head row-head">
             <div>
               <h1>AI 插件与更新</h1>
-              <p class="subtitle">一键把本机 MCP Server 与通用 Skill 接入常用 AI 工具，并从 GitHub 检查更新。</p>
+              <p class="subtitle">一键接入本机 MCP Server 与通用 Skill。首次接入或同步后，请新开对话或重启 Codex / Claude Code 以刷新工具列表。</p>
             </div>
             <button class="btn primary" id="installAllClientsBtn" type="button">一键接入全部</button>
           </header>
@@ -368,7 +370,7 @@
             </div>
             <div class="settings-card">
               <div class="setting-row update-row" id="updateStatus">
-                当前运行版本 <strong id="updateCurrentVer">v1.0.1</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>
+                当前运行版本 <strong id="updateCurrentVer">v1.1.0</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>
               </div>
             </div>
           </div>

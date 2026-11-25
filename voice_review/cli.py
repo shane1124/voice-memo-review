@@ -42,6 +42,8 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
         ("ffprobe", shutil.which(cfg.ffprobe_bin) is not None or Path(cfg.ffprobe_bin).is_file(), cfg.ffprobe_bin),
         ("FluidAudio (fluidaudiocli)", cfg.fluidaudio_bin is not None, str(cfg.fluidaudio_bin or "未找到（可设 preprocessor=none）")),
         ("Antigravity agentapi", cfg.agentapi_bin.is_file(), str(cfg.agentapi_bin)),
+        ("Codex CLI（免 Key 分析）", shutil.which(cfg.codex_bin) is not None or Path(cfg.codex_bin).is_file(), cfg.codex_bin),
+        ("Claude Code CLI（免 Key 分析）", shutil.which(cfg.claude_bin) is not None or Path(cfg.claude_bin).is_file(), cfg.claude_bin),
         ("苹果语音备忘录目录", cfg.recordings_dir.is_dir(), str(cfg.recordings_dir)),
         ("插槽组合校验", ok_combo, f"{cfg.transcriber_provider} + {cfg.analyzer_auto_provider} ({combo_msg})"),
     ]
