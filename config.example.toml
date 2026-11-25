@@ -9,8 +9,8 @@ analysis_timeout_sec = 900
 
 # 桌面 AI 对话设置（Antigravity / Codex 桌面版 / Claude 桌面版通用）
 model = "gemini-4-neon-xhigh"
-conversation_title = "录音自动分析助手"
-rotation = "per_recording"  # per_recording（默认，每条新录音开独立对话） | daily | weekly | single
+conversation_title = "录音分析"
+rotation = "daily"  # daily（默认，每天一个对话窗口，如 11-25-2026 录音分析） | per_recording | weekly | single
 
 # 插槽 1：音频输入源（可同时开启，不依赖 iCloud 也能用投放文件夹）
 [sources]

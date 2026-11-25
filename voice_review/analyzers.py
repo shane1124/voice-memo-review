@@ -805,7 +805,7 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
         bucket, bucket_title = resolve_bucket(self.cfg, req.recorded_at)
         meta_key = f"claude_{bucket}" if bucket else None
         prev_sid = (self.store.get_meta(meta_key) or "") if (self.store is not None and meta_key) else ""
-        session_name = bucket_title if bucket else f"录音分析 · {req.title[:28]}"
+        session_name = bucket_title if bucket else f"{bucket_title} · {req.title[:24]}"
 
         session_id = ""
         try:

@@ -460,7 +460,7 @@
     $("#cfgTrMode").value = (c.transcriber && c.transcriber.mode) || "full_audio";
     $("#cfgAnalyzer").value = (c.analyzer && c.analyzer.auto_provider) || "antigravity-agentapi";
     if ($("#cfgRotation")) {
-      $("#cfgRotation").value = c.rotation || "per_recording";
+      $("#cfgRotation").value = c.rotation || "daily";
     }
     $("#cfgAnBaseUrl").value = (c.analyzer && c.analyzer.base_url) || "";
     $("#cfgAnModel").value = (c.analyzer && c.analyzer.model) || "";
@@ -488,7 +488,7 @@
         method: "PUT",
         body: {
           output_dir: $("#cfgOutputDir").value.trim(),
-          rotation: $("#cfgRotation") ? $("#cfgRotation").value : "per_recording",
+          rotation: $("#cfgRotation") ? $("#cfgRotation").value : "daily",
           sources: { drop_folder_dir: $("#cfgDropDir").value.trim() },
           preprocessor: { mode: $("#cfgPreprocessor").value },
           transcriber: trObj,

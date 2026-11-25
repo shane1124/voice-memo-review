@@ -131,23 +131,24 @@ def render_v2_review_prompt(
 
 
 def resolve_bucket(cfg: VoiceReviewConfig, recorded_at: str) -> tuple[str | None, str]:
-    mode = (cfg.rotation or "weekly").strip().lower()
-    base = cfg.conversation_title or "录音自动分析助手"
+    mode = (cfg.rotation or "daily").strip().lower()
+    base = cfg.conversation_title or "录音分析"
     try:
         dt = datetime.fromisoformat(recorded_at)
         dt = dt.astimezone(SHANGHAI_TZ) if dt.tzinfo else dt.replace(tzinfo=SHANGHAI_TZ)
     except ValueError:
         dt = datetime.now(SHANGHAI_TZ)
+    mdy = dt.strftime("%m-%d-%Y")
     if mode == "daily":
         d = dt.strftime("%Y-%m-%d")
-        return f"conv:daily-{d}", f"{base} · {d}"
+        return f"conv:daily-{d}", f"{mdy} {base}"
     if mode == "weekly":
         y, w, wd = dt.isocalendar()
-        mon = (dt - timedelta(days=wd - 1)).strftime("%Y-%m-%d")
-        sun = (dt + timedelta(days=7 - wd)).strftime("%m-%d")
-        return f"conv:weekly-{y}-W{w:02d}", f"{base} · {mon}~{sun}（第{w}周）"
+        mon = (dt - timedelta(days=wd - 1)).strftime("%m-%d")
+        sun = (dt + timedelta(days=7 - wd)).strftime("%m-%d-%Y")
+        return f"conv:weekly-{y}-W{w:02d}", f"{mon}~{sun} {base}（第{w}周）"
     if mode == "per_recording":
-        return None, f"{base} · {dt.strftime('%m-%d %H:%M')}"
+        return None, f"{mdy} {dt.strftime('%H:%M')} {base}"
     return "conv:default", base
 
 

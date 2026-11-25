@@ -165,7 +165,7 @@ def _tool_defs() -> list[dict[str, Any]]:
                     "drop_folder_enabled": {"type": "boolean"},
                     "drop_folder_dir": {"type": "string"},
                     "autostart_enabled": {"type": "boolean", "description": "可选：开启或关闭 macOS 开机后台自启（launchd）"},
-                    "rotation": {"type": "string", "enum": ["per_recording", "daily", "weekly", "single"], "description": "可选：新录音分析对话归类策略（默认 per_recording 每条新开独立对话 / daily 按天合并 / weekly 按周合并 / single 单窗复用）"},
+                    "rotation": {"type": "string", "enum": ["daily", "per_recording", "weekly", "single"], "description": "可选：新录音分析对话归类策略（默认 daily 每天一个对话窗口如 11-25-2026 录音分析 / per_recording 每条独立 / weekly 按周合并 / single 单窗复用）"},
                     "output_dir": {"type": "string", "description": "可选：复盘分析稿保存目录"},
                     "min_duration_sec": {"type": "number", "description": "可选：自动跳过短于该秒数的误触录音（如 10 或 30）"},
                 },

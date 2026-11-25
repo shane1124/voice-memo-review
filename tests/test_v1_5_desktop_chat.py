@@ -10,6 +10,7 @@ import unittest
 from unittest import mock
 import urllib.request
 
+from voice_review.agent_bridge import resolve_bucket
 from voice_review.analyzers import (
     AnalysisRequest,
     ClaudeCliAnalyzer,
@@ -37,11 +38,22 @@ def _make_exec(path: Path, content: str) -> Path:
 
 
 class TestV15DesktopChat(unittest.TestCase):
-    def test_default_rotation_is_per_recording(self) -> None:
+    def test_default_rotation_is_daily_and_title_puts_date_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = load_config(vmr_home=root)
-            self.assertEqual(cfg.rotation, "per_recording")
+            self.assertEqual(cfg.rotation, "daily")
+            self.assertEqual(cfg.conversation_title, "录音分析")
+            bucket, title = resolve_bucket(cfg, "2026-11-25T14:30:00+08:00")
+            self.assertEqual(bucket, "conv:daily-2026-11-25")
+            self.assertEqual(title, "11-25-2026 录音分析")
+
+            cfg_path = root / "per.toml"
+            save_config_dict(cfg_path, {"rotation": "per_recording"})
+            cfg_per = load_config(cfg_path, vmr_home=root)
+            b_per, t_per = resolve_bucket(cfg_per, "2026-11-25T14:30:00+08:00")
+            self.assertIsNone(b_per)
+            self.assertEqual(t_per, "11-25-2026 14:30 录音分析")
 
     def test_claude_desktop_per_recording_daily_resume_and_self_heal(self) -> None:
         sid_1 = "11111111-2222-4333-8444-555555555551"
