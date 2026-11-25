@@ -160,12 +160,12 @@ printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
             studio = RuleStudio(Path(tmp) / "rules")
             studio.ensure_initialized()
 
-            # 1) 默认模板升级为深度多镜头实战版且严格脱敏
+            # 1) 默认模板保持通用高含金量且严格脱敏
             tpl = studio.get_template("general_review")
-            self.assertIn("30 秒速览快报", tpl.body)
-            self.assertIn("没接稳", tpl.body)
-            self.assertIn("六层严谨口径", tpl.body)
-            for forbidden in ("obsidian", "微信快报", "hermes", "clawbot", "私人业务"):
+            self.assertIn("30 秒速览", tpl.body)
+            self.assertIn("核心摘要", tpl.body)
+            self.assertIn("严格区分事实与推断", tpl.body)
+            for forbidden in ("obsidian", "微信快报", "hermes", "clawbot", "私人业务", "茶局"):
                 self.assertNotIn(forbidden, tpl.body.lower())
 
             # 2) 初始化时词表与背景自带清晰引导文案，但不会污染实际 Prompt
@@ -235,7 +235,8 @@ printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
             assert bad_set is not None
             self.assertTrue(bad_set["result"]["isError"])
 
-            # vmr_update_settings 合法切换为 openai-compatible-asr + codex-cli 并开启投放箱
+            # vmr_update_settings 合法切换为 openai-compatible-asr + codex-cli 并写入运行偏好
+            custom_out = root / "my_notes"
             ok_set = srv.handle_message(
                 {
                     "jsonrpc": "2.0",
@@ -248,6 +249,9 @@ printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
                             "transcriber_model": "whisper-1",
                             "analyzer_auto_provider": "codex-cli",
                             "drop_folder_enabled": True,
+                            "rotation": "daily",
+                            "output_dir": str(custom_out),
+                            "min_duration_sec": 30,
                         },
                     },
                 }
@@ -258,10 +262,15 @@ printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
             self.assertEqual(set_data["transcriber_provider"], "openai-compatible-asr")
             self.assertEqual(set_data["analyzer_auto_provider"], "codex-cli")
             self.assertTrue(set_data["drop_folder_enabled"])
+            self.assertEqual(set_data["rotation"], "daily")
+            self.assertEqual(set_data["min_duration_sec"], 30.0)
 
             reloaded = load_config(vmr_home=root)
             self.assertEqual(reloaded.analyzer_auto_provider, "codex-cli")
             self.assertEqual(reloaded.transcriber_settings.get("model"), "whisper-1")
+            self.assertEqual(reloaded.rotation, "daily")
+            self.assertEqual(reloaded.output_dir, custom_out.resolve())
+            self.assertEqual(reloaded.min_duration_sec, 30.0)
 
     def test_codex_installer_mentions_new_chat_reload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

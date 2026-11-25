@@ -145,7 +145,7 @@ def _tool_defs() -> list[dict[str, Any]]:
         },
         {
             "name": "vmr_update_settings",
-            "description": "更新四插槽非敏感配置（转写引擎、后台自动分析引擎如 codex-cli/claude-cli/antigravity-agentapi/none、监听源开关及 macOS 开机后台自启），保存后自动通知本机守护热重载。不含 API Key。",
+            "description": "更新四插槽与常用偏好非敏感配置（转写/分析引擎、监听源开关、macOS 开机自启、对话轮换频率 rotation、输出目录 output_dir、短录音过滤秒数 min_duration_sec），保存后自动通知本机守护热重载。不含 API Key。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -161,6 +161,9 @@ def _tool_defs() -> list[dict[str, Any]]:
                     "drop_folder_enabled": {"type": "boolean"},
                     "drop_folder_dir": {"type": "string"},
                     "autostart_enabled": {"type": "boolean", "description": "可选：开启或关闭 macOS 开机后台自启（launchd）"},
+                    "rotation": {"type": "string", "enum": ["daily", "weekly", "per_recording", "single"], "description": "可选：新开分析对话频率（daily 每天 / weekly 每周 / per_recording 每条独立 / single 单窗复用）"},
+                    "output_dir": {"type": "string", "description": "可选：复盘分析稿保存目录"},
+                    "min_duration_sec": {"type": "number", "description": "可选：自动跳过短于该秒数的误触录音（如 10 或 30）"},
                 },
             },
         },
@@ -333,6 +336,20 @@ class McpStdioServer:
                 merged.setdefault("sources", {}).update(src_patch)
                 patch_for_daemon["sources"] = src_patch
 
+            if args.get("rotation") in ("daily", "weekly", "per_recording", "single"):
+                merged["rotation"] = str(args["rotation"])
+                patch_for_daemon["rotation"] = merged["rotation"]
+            if args.get("output_dir"):
+                out_p = str(Path(str(args["output_dir"])).expanduser().resolve())
+                merged["output_dir"] = out_p
+                merged["transcripts_dir"] = str(Path(out_p) / "_转录稿")
+                patch_for_daemon["output_dir"] = out_p
+                patch_for_daemon["transcripts_dir"] = merged["transcripts_dir"]
+            if args.get("min_duration_sec") is not None:
+                val_min = max(1.0, float(args["min_duration_sec"]))
+                merged["min_duration_sec"] = val_min
+                patch_for_daemon["min_duration_sec"] = val_min
+
             t_prov_final = str((merged.get("transcriber") or {}).get("provider") or self.cfg.transcriber_provider)
             a_prov_final = str((merged.get("analyzer") or {}).get("auto_provider") or self.cfg.analyzer_auto_provider)
             ok_combo, combo_msg = validate_provider_combo(t_prov_final, a_prov_final)
@@ -388,6 +405,9 @@ class McpStdioServer:
                 "analyzer_auto_provider": self.cfg.analyzer_auto_provider,
                 "voice_memos_enabled": self.cfg.voice_memos_enabled,
                 "drop_folder_enabled": self.cfg.drop_folder_enabled,
+                "rotation": self.cfg.rotation,
+                "output_dir": str(self.cfg.output_dir),
+                "min_duration_sec": self.cfg.min_duration_sec,
                 "autostart_enabled": AutostartManager.default(self.cfg.vmr_home).status().enabled,
                 "autostart_message": autostart_note,
                 "daemon_reloaded": daemon_reloaded,

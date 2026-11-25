@@ -1,15 +1,16 @@
 ---
 name: voice-memo-review
-description: 跨 AI 可插拔语音复盘技能。用于处理本地录音文件或苹果语音备忘录、查看/修改显化分析规则模板、更新个人背景与词表、切换转写/分析插槽与开机自启（支持 Antigravity/Codex CLI/Claude CLI/API）、检查安全更新、管理本地声纹名册，并按透明模板产出结构化深度复盘。兼容 Antigravity、Claude Code、Codex 与 Cursor。
+description: 跨 AI 可插拔语音复盘技能。用于处理本地录音文件或苹果语音备忘录、结合用户工作场景量身定制显化分析规则模板、更新个人背景与词表、切换转写/分析插槽与开机自启（支持 Antigravity/Codex CLI/Claude CLI/API）、检查安全更新、管理本地声纹名册，并按透明模板产出结构化深度复盘。兼容 Antigravity、Claude Code、Codex 与 Cursor。
 ---
 
 # 语音复盘工作流（voice-memo-review）
 
-当用户要求你「安装/配置语音复盘」「转写或复盘某条录音」「查看近期录音」「查看或修改分析提示词模板、个人背景或专名词表」「切换转写/分析引擎或开机自启」「检查更新」「录入声纹」时，优先通过已接入的 `voice-memo-review` MCP 工具完成全流程。
+当用户要求你「安装/配置语音复盘」「转写或复盘某条录音」「查看近期录音」「结合我的工作量身定制或修改复盘模板、个人背景或词表」「切换转写/分析引擎、对话频率或开机自启」「检查更新」「录入声纹」时，优先通过已接入的 `voice-memo-review` MCP 工具完成全流程。
 
-## 装后引导与版本提醒
-- **按流水线 4 问引导**：当用户刚完成安装，或询问「怎么配最好用」时，先调用 `vmr_status` 亮出本机实际检测到的工具（Antigravity / Codex CLI / Claude Code CLI / 开机自启状态），再按 **① 录音来源（自动监听默认连带开启开机自启）→ ② 转写模型（按本机推荐）→ ③ 分析 Agent（按本机推荐并点明联动规则）→ ④ 可选背景/词表/模板微调** 四个独立问题发问，收到答复后直接调用 `vmr_update_settings` 与 `vmr_update_profile` 落盘。
-- **温和版本提醒（方案 B）**：每次调用 `vmr_status` 时若看到 `update_available == true`，在完成用户当前任务后顺口提醒一句：「顺便一提，`voice-memo-review` 发布了新版 `v<latest_version>`（`<release_notes>`），需要我帮你运行 `vmr update` 安全升级并自动重启吗？」（未得用户确认不擅自升级）。
+## 装后引导、量身定制与版本提醒
+- **4 问流水线引导**：先调用 `vmr_status` 亮出本机实际检测到的可用引擎（Antigravity / Codex CLI / Claude Code CLI，**不要拿苹果语音备忘录目录存在当成已可同步打勾**），再按 **① 录音来源（说明苹果备忘录需 iCloud 同步与足够空间；自动监听默认连带开开机自启）→ ② 转写模型（按本机推荐）→ ③ 分析 Agent（按本机推荐并点明联动规则）→ ④ 量身定制专属模板与运行偏好（对话频率 `rotation` / 保存目录 `output_dir` / 短录音过滤 `min_duration_sec`）** 引导配置。
+- **优先量身定制模板**：内置的 4 套模板（通用对话复盘 / 会议讨论 / 客户拜访 / 个人复盘）只是参考示例；当用户同意时，可结合其口述或经授权扫描其常用工作目录/项目结构，为其量身生成专属复盘模板、个人背景（`persona.md`）与易错词表（`glossary.txt`），并通过 `vmr_save_template` 与 `vmr_update_profile` 仅保存在本机。
+- **温和版本提醒**：每次调用 `vmr_status` 若看到 `update_available == true`，在完成手头任务后顺口提醒一句：「顺便一提，`voice-memo-review` 发布了新版 `v<latest_version>`（`<release_notes>`），需要我帮你运行 `vmr update` 安全升级并自动重启吗？」（未获确认不擅自升级）。
 - **如实说明跨客户端边界**：MCP 是对话内按需调用工具，不会把后台完成的复盘强行弹进已打开的旧聊天窗；后台自动复盘成品统一落盘到本地 Markdown 并在 `vmr ui` 控制台实时呈现，随时在 AI 新对话里一句话即可调 MCP 读取、追问或重分析。
 
 ## 核心工作流原则
@@ -26,8 +27,8 @@ description: 跨 AI 可插拔语音复盘技能。用于处理本地录音文件
      3. 拿到 `transcript_path` 与 `analysis_prompt` 后写出完整复盘，调用 `vmr_save_analysis(recording_id, markdown)` 落盘并把正文直接展示给用户。
 
 ## 显化规则、画像、配置、更新与声纹管理
-- **看/改复盘模板**：调用 `vmr_list_templates` / `vmr_get_template` / `vmr_save_template`，把改动说明清楚并告知文件保存在 `~/.config/voice-memo-review/rules/templates/`。
+- **看/改/定制复盘模板**：调用 `vmr_list_templates` / `vmr_get_template` / `vmr_save_template`，把改动说明清楚并告知文件保存在 `~/.config/voice-memo-review/rules/templates/`。
 - **看/改个人背景与专名词表**：调用 `vmr_get_profile` / `vmr_update_profile` 透明写入 `persona.md` 与 `glossary.txt`。
-- **切换引擎、监听源与开机自启**：调用 `vmr_update_settings`（支持 `autostart_enabled`；切勿让用户在聊天里发明文 API Key，如需填 Key 引导在 `vmr ui` 控制台「引擎插槽」填写）。
+- **切换引擎、监听源、开机自启与运行偏好**：调用 `vmr_update_settings`（支持 `autostart_enabled`、`rotation`、`output_dir`、`min_duration_sec`；切勿让用户在聊天里发明文 API Key，如需填 Key 引导在 `vmr ui` 控制台「引擎插槽」填写）。
 - **检查新版本**：调用 `vmr_check_update(force_refresh=true)` 汇报最新版本与亮点；用户确认更新后执行 `vmr update`（自动校验 SHA256、保护正在进行的转写任务，并无感热重启后台守护）。
 - **声纹注册与管理**：引导用户提供 10～30 秒清晰单人样音，调用 `vmr_manage_voiceprints(action="enroll", name=..., audio_path=...)`。
