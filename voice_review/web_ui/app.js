@@ -20,7 +20,7 @@
     jobs: [],
     drawerJobId: null,
     drawerData: { analysis: "", transcript: "", rawPrompt: "" },
-    drawerMode: "job", // "job" | "prompt"
+    drawerMode: "job",
     drawerTab: "analysis",
   };
 
@@ -29,7 +29,7 @@
   function showToast(msg, isErr = false) {
     const el = $("#toast");
     el.textContent = msg;
-    el.style.background = isErr ? "#b42318" : "#162624";
+    el.style.background = isErr ? "#a82c20" : "#141413";
     el.classList.add("show");
     clearTimeout(showToast._timer);
     showToast._timer = setTimeout(() => el.classList.remove("show"), 3200);
@@ -58,82 +58,151 @@
       .replace(/"/g, "&quot;");
   }
 
+  function inlineMd(escaped) {
+    return escaped
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/`([^`]+)`/g, "<code>$1</code>");
+  }
+
   function renderMarkdown(md) {
     const lines = String(md || "").replace(/\r\n/g, "\n").split("\n");
     const out = [];
     let inList = false;
+    let inCode = false;
+    let codeLines = [];
+    let tableRows = [];
+
+    const flushList = () => {
+      if (inList) { out.push("</ul>"); inList = false; }
+    };
+    const flushTable = () => {
+      if (!tableRows.length) return;
+      const headCells = tableRows[0];
+      const bodyRows = tableRows.slice(2);
+      const thead = `<thead><tr>${headCells.map((c) => `<th>${inlineMd(escapeHtml(c))}</th>`).join("")}</tr></thead>`;
+      const tbody = bodyRows.length
+        ? `<tbody>${bodyRows.map((r) => `<tr>${r.map((c) => `<td>${inlineMd(escapeHtml(c))}</td>`).join("")}</tr>`).join("")}</tbody>`
+        : "";
+      out.push(`<table>${thead}${tbody}</table>`);
+      tableRows = [];
+    };
+
     for (const raw of lines) {
+      if (raw.trim().startsWith("```")) {
+        flushList();
+        flushTable();
+        if (!inCode) {
+          inCode = true;
+          codeLines = [];
+        } else {
+          out.push(`<pre>${escapeHtml(codeLines.join("\n"))}</pre>`);
+          inCode = false;
+        }
+        continue;
+      }
+      if (inCode) {
+        codeLines.push(raw);
+        continue;
+      }
+      if (raw.trim().startsWith("|") && raw.trim().endsWith("|")) {
+        flushList();
+        const cells = raw.trim().slice(1, -1).split("|").map((c) => c.trim());
+        tableRows.push(cells);
+        continue;
+      }
+      flushTable();
+
       const line = escapeHtml(raw);
       if (/^###\s+/.test(line)) {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<h3>${line.replace(/^###\s+/, "")}</h3>`);
+        flushList();
+        out.push(`<h3>${inlineMd(line.replace(/^###\s+/, ""))}</h3>`);
       } else if (/^##\s+/.test(line)) {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<h2>${line.replace(/^##\s+/, "")}</h2>`);
+        flushList();
+        out.push(`<h2>${inlineMd(line.replace(/^##\s+/, ""))}</h2>`);
       } else if (/^#\s+/.test(line)) {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<h1>${line.replace(/^#\s+/, "")}</h1>`);
+        flushList();
+        out.push(`<h1>${inlineMd(line.replace(/^#\s+/, ""))}</h1>`);
       } else if (/^&gt;\s?/.test(line)) {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<blockquote>${line.replace(/^&gt;\s?/, "")}</blockquote>`);
+        flushList();
+        out.push(`<blockquote>${inlineMd(line.replace(/^&gt;\s?/, ""))}</blockquote>`);
       } else if (/^[-*]\s+/.test(line)) {
         if (!inList) { out.push("<ul>"); inList = true; }
-        out.push(`<li>${line.replace(/^[-*]\s+/, "").replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")}</li>`);
+        out.push(`<li>${inlineMd(line.replace(/^[-*]\s+/, ""))}</li>`);
       } else if (line.trim() === "---") {
-        if (inList) { out.push("</ul>"); inList = false; }
+        flushList();
         out.push("<hr />");
       } else if (line.trim() === "") {
-        if (inList) { out.push("</ul>"); inList = false; }
+        flushList();
       } else {
-        if (inList) { out.push("</ul>"); inList = false; }
-        out.push(`<p>${line.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`([^`]+)`/g, "<code>$1</code>")}</p>`);
+        flushList();
+        out.push(`<p>${inlineMd(line)}</p>`);
       }
     }
-    if (inList) out.push("</ul>");
+    flushList();
+    flushTable();
+    if (inCode) out.push(`<pre>${escapeHtml(codeLines.join("\n"))}</pre>`);
     return out.join("\n") || '<div class="empty-state">暂无正文内容</div>';
   }
 
-  // 导航切换
+  // 主导航切换
   document.querySelectorAll(".nav-item").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".nav-item").forEach((b) => b.classList.remove("active"));
       document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
       btn.classList.add("active");
-      const target = `#view-${btn.dataset.view}`;
-      $(target).classList.add("active");
-      if (btn.dataset.view === "integrations") loadIntegrations();
-      if (btn.dataset.view === "rules") { loadTemplates(); loadRuleMeta(); loadVoiceprints(); }
+      $(`#view-${btn.dataset.view}`).classList.add("active");
+      if (btn.dataset.view === "integrations") loadIntegrations().catch((e) => showToast(e.message, true));
+      if (btn.dataset.view === "rules") {
+        Promise.all([loadTemplates(), loadRuleMeta(), loadVoiceprints()]).catch((e) => showToast(e.message, true));
+      }
+    });
+  });
+
+  // 规则工作室子 Tab 切换
+  document.querySelectorAll("[data-rules-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("[data-rules-tab]").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".rules-pane").forEach((p) => p.classList.remove("active"));
+      btn.classList.add("active");
+      $(`#rules-pane-${btn.dataset.rulesTab}`).classList.add("active");
     });
   });
 
   // 状态加载
   async function loadStatus() {
+    if (!TOKEN) {
+      $("#tokenBanner").hidden = false;
+      $("#daemonDot").className = "status-dot error";
+      $("#daemonLabel").textContent = "缺少会话令牌";
+      return;
+    }
     try {
       const st = await apiFetch("/api/v1/status");
+      $("#tokenBanner").hidden = true;
       $("#appVersion").textContent = `v${st.version}`;
       $("#updateCurrentVer").textContent = `v${st.version}`;
-      $("#daemonDot").className = "dot online";
-      $("#daemonLabel").textContent = st.watching ? "后台监听运行中" : "单守护已就绪（手动模式）";
-      $("#engineMini").textContent = `转写: ${st.transcriber_provider} | 分析: ${st.analyzer_auto_provider}`;
+      $("#daemonDot").className = "status-dot online";
+      $("#daemonLabel").textContent = st.watching ? "监听运行中" : "本地守护已就绪";
+      $("#engineMini").textContent = `${st.transcriber_provider} → ${st.analyzer_auto_provider}`;
       $("#toggleVoiceMemos").checked = Boolean(st.voice_memos_enabled);
       $("#toggleDropFolder").checked = Boolean(st.drop_folder_enabled);
     } catch (err) {
-      $("#daemonDot").className = "dot error";
+      $("#daemonDot").className = "status-dot error";
       $("#daemonLabel").textContent = "守护未连接或令牌失效";
     }
   }
 
   // 任务列表
   const STATUS_TEXT = {
-    discovered: ["待处理", "running"],
+    discovered: ["排队中", "running"],
     preparing: ["本地声纹切段中", "running"],
-    prepared: ["待转写", "running"],
+    prepared: ["待转写", "awaiting"],
     transcribing: ["转写中", "running"],
     transcribed: ["已转写", "running"],
-    analyzing: ["分析生成中", "running"],
-    awaiting_analysis: ["待分析（可手动/MCP接手）", "awaiting"],
+    analyzing: ["分析中", "running"],
+    awaiting_analysis: ["待分析", "awaiting"],
     done: ["已完成", "done"],
-    skipped: ["已跳过（无有效人声）", ""],
+    skipped: ["静音已跳过", ""],
     failed: ["处理失败", "failed"],
   };
 
@@ -149,7 +218,7 @@
     state.jobs = data.jobs || [];
     const box = $("#jobsList");
     if (!state.jobs.length) {
-      box.innerHTML = '<div class="empty-state">暂无处理记录，拖入一条录音试试看。</div>';
+      box.innerHTML = '<div class="empty-state">还没有录音记录，拖入一段音频开始吧。</div>';
       return;
     }
     box.innerHTML = state.jobs.map((j) => {
@@ -160,27 +229,29 @@
       const canRead = Boolean(j.transcript_path || j.analysis_path);
       return `
         <div class="job-row">
-          <div>
+          <div class="job-info">
             <div class="job-title">${escapeHtml(j.title)}</div>
             <div class="job-meta">${escapeHtml(j.recorded_at.slice(0, 16).replace("T", " "))} · ${fmtDur(j.duration_sec)} · ${escapeHtml(j.source_kind)}${errNote}</div>
           </div>
-          <span class="badge ${cls}">${label}${prog}</span>
-          <div class="head-actions">
-            ${canRead ? `<button class="btn ghost" data-open-job="${escapeHtml(j.recording_id)}">查看结果</button>` : ""}
-            ${j.status === "failed" ? `<button class="btn ghost" data-retry-job="${escapeHtml(j.recording_id)}">重试</button>` : ""}
+          <div class="job-right">
+            <span class="badge ${cls}">${label}${prog}</span>
+            ${canRead ? `<button class="btn subtle" data-open-job="${escapeHtml(j.recording_id)}" type="button">阅读</button>` : ""}
+            ${j.status === "failed" ? `<button class="btn subtle" data-retry-job="${escapeHtml(j.recording_id)}" type="button">重试</button>` : ""}
           </div>
         </div>
       `;
     }).join("");
 
     box.querySelectorAll("[data-open-job]").forEach((b) => {
-      b.addEventListener("click", () => openJobDrawer(b.dataset.openJob));
+      b.addEventListener("click", () => openJobDrawer(b.dataset.openJob).catch((e) => showToast(e.message, true)));
     });
     box.querySelectorAll("[data-retry-job]").forEach((b) => {
       b.addEventListener("click", async () => {
-        await apiFetch(`/api/v1/jobs/${encodeURIComponent(b.dataset.retryJob)}/retry`, { method: "POST", body: {} });
-        showToast("已重新加入队列");
-        loadJobs();
+        try {
+          await apiFetch(`/api/v1/jobs/${encodeURIComponent(b.dataset.retryJob)}/retry`, { method: "POST", body: {} });
+          showToast("已重新加入队列");
+          await loadJobs();
+        } catch (e) { showToast(e.message, true); }
       });
     });
   }
@@ -189,20 +260,20 @@
   async function uploadAudioFile(file) {
     const tplId = $("#uploadTemplateSelect").value || "";
     const qs = new URLSearchParams({ filename: file.name, template_id: tplId });
-    showToast(`正在上传并入队：${file.name}`);
-    const buf = await file.arrayBuffer();
+    showToast(`正在上传：${file.name}`);
     await apiFetch(`/api/v1/jobs/upload?${qs.toString()}`, {
       method: "POST",
       headers: { "Content-Type": "application/octet-stream" },
-      body: buf,
+      body: file,
     });
-    showToast(`已入队开始处理：${file.name}`);
-    loadJobs();
+    showToast(`已开始处理：${file.name}`);
+    await loadJobs();
   }
 
   const dropZone = $("#dropZone");
   const fileInput = $("#fileInput");
   $("#pickFileBtn").addEventListener("click", () => fileInput.click());
+  $("#dropClickArea").addEventListener("click", () => fileInput.click());
   fileInput.addEventListener("change", () => {
     if (fileInput.files && fileInput.files[0]) uploadAudioFile(fileInput.files[0]).catch((e) => showToast(e.message, true));
     fileInput.value = "";
@@ -226,15 +297,15 @@
           },
         },
       });
-      showToast("监听源开关已热更新");
-      loadStatus();
+      showToast("监听开关已更新");
+      await loadStatus();
     } catch (e) {
       showToast(e.message, true);
     }
   }
   $("#toggleVoiceMemos").addEventListener("change", updateSourceToggle);
   $("#toggleDropFolder").addEventListener("change", updateSourceToggle);
-  $("#refreshJobsBtn").addEventListener("click", () => loadJobs());
+  $("#refreshJobsBtn").addEventListener("click", () => loadJobs().catch((e) => showToast(e.message, true)));
 
   // 引擎插槽配置
   function refreshProviderFieldVisibility() {
@@ -258,6 +329,20 @@
     document.querySelectorAll("[data-an-field]").forEach((el) => {
       el.hidden = !anShow.includes(el.dataset.anField);
     });
+    if (tr === "gemini-api") {
+      $("#cfgTrBaseUrl").placeholder = "https://generativelanguage.googleapis.com/v1beta";
+      $("#cfgTrModel").placeholder = "gemini-2.5-flash";
+    } else if (tr === "openai-compatible-asr") {
+      $("#cfgTrBaseUrl").placeholder = "https://api.openai.com/v1";
+      $("#cfgTrModel").placeholder = "whisper-1";
+    }
+    if (an === "gemini-llm") {
+      $("#cfgAnBaseUrl").placeholder = "https://generativelanguage.googleapis.com/v1beta";
+      $("#cfgAnModel").placeholder = "gemini-2.5-pro";
+    } else if (an === "openai-compatible-llm") {
+      $("#cfgAnBaseUrl").placeholder = "https://api.deepseek.com/v1";
+      $("#cfgAnModel").placeholder = "deepseek-chat";
+    }
     const warn = $("#comboWarning");
     if (tr === "antigravity-flash" && (an === "openai-compatible-llm" || an === "gemini-llm")) {
       warn.hidden = false;
@@ -265,35 +350,6 @@
     } else {
       warn.hidden = true;
     }
-  }
-
-  async function loadConfig() {
-    const data = await apiFetch("/api/v1/config");
-    state.config = data.config;
-    state.secrets = data.secrets || {};
-    const c = state.config;
-    $("#cfgOutputDir").value = c.output_dir || "";
-    $("#cfgDropDir").value = (c.sources && c.sources.drop_folder_dir) || "";
-    $("#cfgPreprocessor").value = (c.preprocessor && c.preprocessor.mode) || "fluidaudio";
-    $("#cfgTranscriber").value = (c.transcriber && c.transcriber.provider) || "antigravity-flash";
-    $("#cfgTrBaseUrl").value = (c.transcriber && c.transcriber.base_url) || "";
-    $("#cfgTrModel").value = (c.transcriber && c.transcriber.model) || "";
-    const trCmd = c.transcriber && c.transcriber.command;
-    $("#cfgTrCommand").value = Array.isArray(trCmd) ? trCmd.join(" ") : (trCmd || "");
-    $("#cfgTrMode").value = (c.transcriber && c.transcriber.mode) || "full_audio";
-    $("#cfgTrApiKey").value = $("#cfgTranscriber").value === "gemini-api"
-      ? (state.secrets.gemini_api_key || "")
-      : (state.secrets.openai_asr_api_key || "");
-
-    $("#cfgAnalyzer").value = (c.analyzer && c.analyzer.auto_provider) || "antigravity-agentapi";
-    $("#cfgAnBaseUrl").value = (c.analyzer && c.analyzer.base_url) || "";
-    $("#cfgAnModel").value = (c.analyzer && c.analyzer.model) || "";
-    $("#cfgAnApiKey").value = $("#cfgAnalyzer").value === "gemini-llm"
-      ? (state.secrets.gemini_api_key || "")
-      : (state.secrets.openai_llm_api_key || "");
-
-    $("#updateRepoLabel").textContent = (c.update && c.update.repo) || "shane1124/voice-memo-review";
-    refreshProviderFieldVisibility();
   }
 
   function syncSecretInputsForSelectedProviders() {
@@ -313,9 +369,7 @@
     const secretsPatch = {};
     const putSecretIfNew = (key, rawVal) => {
       const val = String(rawVal || "").trim();
-      if (val && !val.includes("****")) {
-        secretsPatch[key] = val;
-      }
+      if (val && !val.includes("****")) secretsPatch[key] = val;
     };
     if (tr === "gemini-api") putSecretIfNew("gemini_api_key", $("#cfgTrApiKey").value);
     if (tr === "openai-compatible-asr") putSecretIfNew("openai_asr_api_key", $("#cfgTrApiKey").value);
@@ -328,7 +382,6 @@
       if ($("#cfgTrModel").value.trim()) trObj.model = $("#cfgTrModel").value.trim();
     } else if (tr === "command-asr") {
       trObj.mode = $("#cfgTrMode").value;
-      // 直接传递原始命令字符串交由后端 shlex.split 安全解析，完整保留含空格引号路径
       if ($("#cfgTrCommand").value.trim()) trObj.command = $("#cfgTrCommand").value.trim();
     }
 
@@ -338,6 +391,28 @@
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
     }
     return { trObj, anObj, secretsPatch };
+  }
+
+  async function loadConfig() {
+    const data = await apiFetch("/api/v1/config");
+    state.config = data.config;
+    state.secrets = data.secrets || {};
+    const c = state.config;
+    $("#cfgOutputDir").value = c.output_dir || "";
+    $("#cfgDropDir").value = (c.sources && c.sources.drop_folder_dir) || "";
+    $("#cfgPreprocessor").value = (c.preprocessor && c.preprocessor.mode) || "fluidaudio";
+    $("#cfgTranscriber").value = (c.transcriber && c.transcriber.provider) || "antigravity-flash";
+    $("#cfgTrBaseUrl").value = (c.transcriber && c.transcriber.base_url) || "";
+    $("#cfgTrModel").value = (c.transcriber && c.transcriber.model) || "";
+    const trCmd = c.transcriber && c.transcriber.command;
+    $("#cfgTrCommand").value = Array.isArray(trCmd) ? trCmd.join(" ") : (trCmd || "");
+    $("#cfgTrMode").value = (c.transcriber && c.transcriber.mode) || "full_audio";
+    $("#cfgAnalyzer").value = (c.analyzer && c.analyzer.auto_provider) || "antigravity-agentapi";
+    $("#cfgAnBaseUrl").value = (c.analyzer && c.analyzer.base_url) || "";
+    $("#cfgAnModel").value = (c.analyzer && c.analyzer.model) || "";
+    $("#updateRepoLabel").textContent = (c.update && c.update.repo) || "shane1124/voice-memo-review";
+    refreshProviderFieldVisibility();
+    syncSecretInputsForSelectedProviders();
   }
 
   $("#cfgTranscriber").addEventListener("change", () => {
@@ -363,7 +438,7 @@
           secrets: secretsPatch,
         },
       });
-      showToast("引擎插槽与密钥已安全保存");
+      showToast("配置已保存");
       await loadConfig();
       await loadStatus();
     } catch (e) {
@@ -379,10 +454,9 @@
         body: { kind: "transcriber", transcriber: trObj, secrets: secretsPatch },
       });
       showToast(res.message, !res.ok);
-    } catch (e) {
-      showToast(e.message, true);
-    }
+    } catch (e) { showToast(e.message, true); }
   });
+
   $("#testAnalyzerBtn").addEventListener("click", async () => {
     const { anObj, secretsPatch } = buildProvidersPayloadFromForm();
     try {
@@ -391,9 +465,7 @@
         body: { kind: "analyzer", analyzer: anObj, secrets: secretsPatch },
       });
       showToast(res.message, !res.ok);
-    } catch (e) {
-      showToast(e.message, true);
-    }
+    } catch (e) { showToast(e.message, true); }
   });
 
   // 规则工作室
@@ -450,27 +522,29 @@
     const items = data.voiceprints || [];
     const box = $("#voiceprintList");
     if (!items.length) {
-      box.innerHTML = '<div class="empty-state">尚未录入声纹，上传一段 10～30 秒清晰单人样音即可自动认人。</div>';
+      box.innerHTML = '<div class="empty-state">尚未录入声纹，上传 10～30 秒清晰单人样音即可自动认人。</div>';
       return;
     }
     box.innerHTML = items.map((v) => `
-      <div class="vp-item">
-        <span><strong>${escapeHtml(v.name)}</strong>（${v.samples} 条样本）</span>
-        <button class="btn danger-ghost" data-del-vp="${escapeHtml(v.name)}">删除</button>
+      <div class="vp-row">
+        <div><strong>${escapeHtml(v.name)}</strong> <span class="job-meta">· ${v.samples} 条样本</span></div>
+        <button class="btn danger-text" data-del-vp="${escapeHtml(v.name)}" type="button">删除</button>
       </div>
     `).join("");
     box.querySelectorAll("[data-del-vp]").forEach((b) => {
       b.addEventListener("click", async () => {
-        await apiFetch(`/api/v1/voiceprints/${encodeURIComponent(b.dataset.delVp)}`, { method: "DELETE" });
-        showToast(`已删除声纹：${b.dataset.delVp}`);
-        loadVoiceprints();
+        try {
+          await apiFetch(`/api/v1/voiceprints/${encodeURIComponent(b.dataset.delVp)}`, { method: "DELETE" });
+          showToast(`已删除声纹：${b.dataset.delVp}`);
+          await loadVoiceprints();
+        } catch (e) { showToast(e.message, true); }
       });
     });
   }
 
   $("#newTemplateBtn").addEventListener("click", () => {
     fillTemplateEditor({ id: "", name: "", description: "", body: "", is_default: false, is_builtin: false });
-    $("#tplId").focus();
+    $("#tplName").focus();
   });
 
   $("#saveTemplateBtn").addEventListener("click", async () => {
@@ -486,11 +560,9 @@
         },
       });
       state.activeTplId = res.template.id;
-      showToast(`模板「${res.template.name}」已保存`);
+      showToast(`已保存模板「${res.template.name}」`);
       await loadTemplates();
-    } catch (e) {
-      showToast(e.message, true);
-    }
+    } catch (e) { showToast(e.message, true); }
   });
 
   $("#resetTemplateBtn").addEventListener("click", async () => {
@@ -499,9 +571,7 @@
       await apiFetch(`/api/v1/templates/${encodeURIComponent(state.activeTplId)}/reset`, { method: "POST", body: {} });
       showToast("已恢复内置默认正文");
       await loadTemplates();
-    } catch (e) {
-      showToast(e.message, true);
-    }
+    } catch (e) { showToast(e.message, true); }
   });
 
   $("#deleteTemplateBtn").addEventListener("click", async () => {
@@ -511,41 +581,45 @@
       state.activeTplId = null;
       showToast("模板已删除");
       await loadTemplates();
-    } catch (e) {
-      showToast(e.message, true);
-    }
+    } catch (e) { showToast(e.message, true); }
   });
 
   $("#saveMetaRulesBtn").addEventListener("click", async () => {
-    await apiFetch("/api/v1/rules/meta", {
-      method: "PUT",
-      body: { glossary: $("#rulesGlossary").value, persona: $("#rulesPersona").value },
-    });
-    showToast("专名词表与个人背景已保存");
+    try {
+      await apiFetch("/api/v1/rules/meta", {
+        method: "PUT",
+        body: { glossary: $("#rulesGlossary").value, persona: $("#rulesPersona").value },
+      });
+      showToast("词表与个人背景已保存");
+    } catch (e) { showToast(e.message, true); }
   });
 
   $("#previewPromptBtn").addEventListener("click", async () => {
     try {
       const res = await apiFetch("/api/v1/templates/preview", {
         method: "POST",
-        body: { template_id: state.activeTplId || undefined, title: "示例项目周会" },
+        body: {
+          template_id: state.activeTplId || undefined,
+          name: $("#tplName").value.trim() || undefined,
+          body: $("#tplBody").value,
+          title: "示例项目周会",
+        },
       });
       state.drawerMode = "prompt";
       state.drawerData.rawPrompt = res.prompt;
-      $("#drawerTitle").textContent = "完整拼装 Prompt 预览（所见即所发）";
+      $("#drawerTitle").textContent = "完整 Prompt 预览";
       $("#drawerTabs").hidden = true;
       $("#drawerReanalyzeBtn").hidden = true;
       $("#drawerContent").innerHTML = `<pre>${escapeHtml(res.prompt)}</pre>`;
       openDrawerUI();
-    } catch (e) {
-      showToast(e.message, true);
-    }
+    } catch (e) { showToast(e.message, true); }
   });
 
   $("#vpUploadBtn").addEventListener("click", () => {
-    if (!$("#vpNameInput").value.trim()) { showToast("请先填写说话人姓名", true); return; }
+    if (!$("#vpNameInput").value.trim()) { showToast("请先输入说话人姓名", true); return; }
     $("#vpFileInput").click();
   });
+
   $("#vpFileInput").addEventListener("change", async () => {
     const file = $("#vpFileInput").files && $("#vpFileInput").files[0];
     if (!file) return;
@@ -555,16 +629,13 @@
       const res = await apiFetch(`/api/v1/voiceprints/upload?${qs.toString()}`, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
-        body: await file.arrayBuffer(),
+        body: file,
       });
-      showToast(`声纹录入成功：${res.name}（有效人声 ${res.talk_sec}s）`);
+      showToast(`录入成功：${res.name}（有效人声 ${res.talk_sec}s）`);
       $("#vpNameInput").value = "";
-      loadVoiceprints();
-    } catch (e) {
-      showToast(e.message, true);
-    } finally {
-      $("#vpFileInput").value = "";
-    }
+      await loadVoiceprints();
+    } catch (e) { showToast(e.message, true); }
+    finally { $("#vpFileInput").value = ""; }
   });
 
   // 侧边抽屉
@@ -578,16 +649,19 @@
   }
   $("#drawerBackdrop").addEventListener("click", closeDrawerUI);
   $("#drawerCloseBtn").addEventListener("click", closeDrawerUI);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("#readerDrawer").hidden) closeDrawerUI();
+  });
 
   function renderDrawerTab() {
-    document.querySelectorAll("#drawerTabs .tab").forEach((t) => {
+    document.querySelectorAll("#drawerTabs .seg-btn").forEach((t) => {
       t.classList.toggle("active", t.dataset.tab === state.drawerTab);
     });
     const text = state.drawerTab === "analysis" ? state.drawerData.analysis : state.drawerData.transcript;
     $("#drawerContent").innerHTML = renderMarkdown(text);
   }
 
-  document.querySelectorAll("#drawerTabs .tab").forEach((t) => {
+  document.querySelectorAll("#drawerTabs .seg-btn").forEach((t) => {
     t.addEventListener("click", () => {
       state.drawerTab = t.dataset.tab;
       renderDrawerTab();
@@ -612,106 +686,108 @@
     if (!state.drawerJobId) return;
     const tplId = $("#uploadTemplateSelect").value || undefined;
     try {
-      showToast("正在按选定模板重新分析…");
+      showToast("正在重新分析…");
       await apiFetch(`/api/v1/jobs/${encodeURIComponent(state.drawerJobId)}/analyze`, {
         method: "POST",
         body: { template_id: tplId },
       });
       showToast("分析已完成");
       await openJobDrawer(state.drawerJobId);
-      loadJobs();
-    } catch (e) {
-      showToast(e.message, true);
-    }
+      await loadJobs();
+    } catch (e) { showToast(e.message, true); }
   });
 
   $("#drawerCopyBtn").addEventListener("click", async () => {
     const text = state.drawerMode === "prompt"
       ? state.drawerData.rawPrompt
       : (state.drawerTab === "analysis" ? state.drawerData.analysis : state.drawerData.transcript);
-    await navigator.clipboard.writeText(text || "");
-    showToast("已复制到剪贴板");
+    try {
+      await navigator.clipboard.writeText(text || "");
+      showToast("已复制到剪贴板");
+    } catch (e) { showToast("复制失败，请手动选中复制", true); }
   });
 
-  // AI 插件桥接与更新
+  // AI 插件桥接与更新（简洁设置列表行风格）
   async function loadIntegrations() {
     const data = await apiFetch("/api/v1/integrations");
     const clients = data.clients || {};
-    const grid = $("#clientsGrid");
+    const box = $("#clientsGrid");
     const keys = Object.keys(clients);
     if (!keys.length) {
-      grid.innerHTML = '<div class="empty-state">暂未扫描到客户端信息</div>';
+      box.innerHTML = '<div class="empty-state">暂未扫描到 AI 客户端</div>';
       return;
     }
-    grid.innerHTML = keys.map((k) => {
+    box.innerHTML = keys.map((k) => {
       const c = clients[k];
       const badge = c.installed
         ? '<span class="badge done">已接入</span>'
-        : (c.detected ? '<span class="badge awaiting">已检测到 · 未接入</span>' : '<span class="badge">未检测到客户端</span>');
+        : (c.detected ? '<span class="badge awaiting">未接入</span>' : '<span class="badge">未安装</span>');
       return `
-        <div class="client-card">
-          <div class="client-top">
-            <strong>${escapeHtml(c.display_name || k)}</strong>
-            ${badge}
+        <div class="client-row">
+          <div class="client-info">
+            <div class="client-name">${escapeHtml(c.display_name || k)}</div>
+            <div class="client-path">${escapeHtml(c.config_path || "")}</div>
           </div>
-          <div class="client-path">${escapeHtml(c.config_path || "")}</div>
-          <div class="head-actions">
-            <button class="btn primary" data-inst="${escapeHtml(k)}">${c.installed ? "重新同步" : "一键接入"}</button>
-            ${c.installed ? `<button class="btn danger-ghost" data-uninst="${escapeHtml(k)}">卸载</button>` : ""}
+          <div class="client-right">
+            ${badge}
+            <button class="btn subtle" data-inst="${escapeHtml(k)}" type="button">${c.installed ? "同步" : "接入"}</button>
+            ${c.installed ? `<button class="btn danger-text" data-uninst="${escapeHtml(k)}" type="button">卸载</button>` : ""}
           </div>
         </div>
       `;
     }).join("");
 
-    grid.querySelectorAll("[data-inst]").forEach((b) => {
+    box.querySelectorAll("[data-inst]").forEach((b) => {
       b.addEventListener("click", async () => {
         try {
           await apiFetch("/api/v1/integrations/install", { method: "POST", body: { targets: [b.dataset.inst] } });
-          showToast(`已接入 ${b.dataset.inst}`);
-          loadIntegrations();
+          showToast(`已同步接入 ${b.dataset.inst}`);
+          await loadIntegrations();
         } catch (e) { showToast(e.message, true); }
       });
     });
-    grid.querySelectorAll("[data-uninst]").forEach((b) => {
+    box.querySelectorAll("[data-uninst]").forEach((b) => {
       b.addEventListener("click", async () => {
         try {
           await apiFetch("/api/v1/integrations/uninstall", { method: "POST", body: { targets: [b.dataset.uninst] } });
           showToast(`已卸载 ${b.dataset.uninst}`);
-          loadIntegrations();
+          await loadIntegrations();
         } catch (e) { showToast(e.message, true); }
       });
     });
   }
 
-  $("#refreshIntegrationsBtn").addEventListener("click", () => loadIntegrations());
+  $("#refreshIntegrationsBtn").addEventListener("click", () => loadIntegrations().catch((e) => showToast(e.message, true)));
   $("#installAllClientsBtn").addEventListener("click", async () => {
     try {
       await apiFetch("/api/v1/integrations/install", { method: "POST", body: {} });
-      showToast("已为所有已检测 AI 客户端写入 MCP 与 Skill");
-      loadIntegrations();
+      showToast("已为所有已检测 AI 客户端同步 MCP 与 Skill");
+      await loadIntegrations();
     } catch (e) { showToast(e.message, true); }
   });
 
   $("#checkUpdateBtn").addEventListener("click", async () => {
-    const info = await apiFetch("/api/v1/update/check");
-    const box = $("#updateStatus");
-    if (!info.ok) {
-      box.textContent = `检查更新失败：${info.error || "网络不可达"}`;
-      $("#applyUpdateBtn").hidden = true;
-      return;
-    }
-    if (info.has_update) {
-      box.innerHTML = `发现新版本 <strong>v${escapeHtml(info.latest_version)}</strong>（当前 v${escapeHtml(info.current_version)}）。点击右侧「立即更新」即可安全升级，不会覆盖你的模板与密钥。`;
-      $("#applyUpdateBtn").hidden = false;
-    } else {
-      box.innerHTML = `当前已是最新版本 <strong>v${escapeHtml(info.current_version)}</strong>。`;
-      $("#applyUpdateBtn").hidden = true;
-    }
+    try {
+      const info = await apiFetch("/api/v1/update/check");
+      const box = $("#updateStatus");
+      if (!info.ok) {
+        box.textContent = `检查更新失败：${info.error || "网络不可达"}`;
+        $("#applyUpdateBtn").hidden = true;
+        return;
+      }
+      if (info.has_update) {
+        box.innerHTML = `发现新版本 <strong>v${escapeHtml(info.latest_version)}</strong>（当前 v${escapeHtml(info.current_version)}），点击「立即更新」即可安全升级。`;
+        $("#applyUpdateBtn").hidden = false;
+      } else {
+        box.innerHTML = `当前已是最新版本 <strong>v${escapeHtml(info.current_version)}</strong>。`;
+        $("#applyUpdateBtn").hidden = true;
+      }
+    } catch (e) { showToast(e.message, true); }
   });
 
   $("#applyUpdateBtn").addEventListener("click", async () => {
     try {
-      showToast("正在校验 SHA256 并更新程序目录…");
+      showToast("正在校验 SHA256 并安全更新…");
       const res = await apiFetch("/api/v1/update/apply", { method: "POST", body: {} });
       showToast(res.message || "更新成功，请重启控制台");
     } catch (e) { showToast(e.message, true); }
@@ -721,16 +797,19 @@
   function connectEvents() {
     if (!TOKEN) return;
     const es = new EventSource(`/api/v1/events?token=${encodeURIComponent(TOKEN)}`);
-    es.addEventListener("job", () => loadJobs());
-    es.addEventListener("progress", () => loadJobs());
+    es.addEventListener("job", () => loadJobs().catch(() => {}));
+    es.addEventListener("progress", () => loadJobs().catch(() => {}));
     es.onerror = () => {
       es.close();
       setTimeout(connectEvents, 4000);
     };
   }
 
-  // 初始化
-  Promise.all([loadStatus(), loadConfig(), loadTemplates(), loadJobs()])
-    .then(() => connectEvents())
-    .catch((e) => showToast(e.message, true));
+  if (TOKEN) {
+    Promise.all([loadStatus(), loadConfig(), loadTemplates(), loadJobs()])
+      .then(() => connectEvents())
+      .catch((e) => showToast(e.message, true));
+  } else {
+    loadStatus();
+  }
 })();

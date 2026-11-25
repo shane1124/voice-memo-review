@@ -128,6 +128,15 @@ class EventBroadcaster:
             for q in dead:
                 self._subs.discard(q)
 
+    def close_all(self) -> None:
+        with self._lock:
+            for q in list(self._subs):
+                try:
+                    q.put_nowait("")
+                except queue.Full:
+                    pass
+            self._subs.clear()
+
 
 class PipelineExecutor:
     """四插槽统一执行器：预处理 → 转写 → 按策略分析，供守护、CLI 与 MCP 共享。"""
@@ -735,6 +744,8 @@ class VmrDaemon:
                         while not daemon._stop_event.is_set():
                             try:
                                 chunk = q.get(timeout=15.0)
+                                if not chunk:
+                                    break
                                 self.wfile.write(chunk.encode("utf-8"))
                                 self.wfile.flush()
                             except queue.Empty:
@@ -1040,14 +1051,33 @@ class VmrDaemon:
 
                 if path == "/api/v1/templates/preview":
                     try:
-                        prompt = daemon.rules.compose_analysis_prompt(
-                            template_id=body.get("template_id"),
-                            title=str(body.get("title") or "示例录音标题"),
-                            recorded_at=datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat(),
-                            duration_sec=1800.0,
-                            speakers_summary="- SPEAKER_00 -> 已确认真名：说话人A（约 15.0 分钟）",
-                            transcript_text=str(body.get("sample_transcript") or "## 00:00:05 **说话人A**\n（此处将填入完整转录稿正文）"),
-                        )
+                        draft_body = body.get("body")
+                        if isinstance(draft_body, str) and draft_body.strip():
+                            tpl_name = str(body.get("name") or body.get("template_id") or "当前编辑模板")
+                            persona = daemon.rules.get_persona()
+                            parts = [
+                                "## 录音元数据",
+                                f"- **录制时间**：{datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat()}",
+                                f"- **标题**：{str(body.get('title') or '示例项目周会')}",
+                                "- **音频时长**：30分00秒",
+                                f"- **选用分析模板**：{tpl_name}（草稿实时预览）",
+                                "- **声纹与说话人概况**：",
+                                "- SPEAKER_00 -> 已确认真名：说话人A（约 15.0 分钟）",
+                            ]
+                            if persona:
+                                parts.extend(["", "## 用户背景说明", persona])
+                            parts.extend(["", f"## 分析规则（模板：{tpl_name}）", draft_body.strip()])
+                            parts.extend(["", "## 完整转录稿正文", str(body.get("sample_transcript") or "## 00:00:05 **说话人A**\n（此处将填入完整转录稿正文）")])
+                            prompt = "\n".join(parts).strip() + "\n"
+                        else:
+                            prompt = daemon.rules.compose_analysis_prompt(
+                                template_id=body.get("template_id"),
+                                title=str(body.get("title") or "示例项目周会"),
+                                recorded_at=datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat(),
+                                duration_sec=1800.0,
+                                speakers_summary="- SPEAKER_00 -> 已确认真名：说话人A（约 15.0 分钟）",
+                                transcript_text=str(body.get("sample_transcript") or "## 00:00:05 **说话人A**\n（此处将填入完整转录稿正文）"),
+                            )
                     except Exception as exc:
                         self._send_json(400, {"ok": False, "error": str(exc)})
                         return
@@ -1128,6 +1158,7 @@ class VmrDaemon:
                 self._httpd = ThreadingHTTPServer((self.host, self._requested_port), handler_cls)
             except OSError:
                 self._httpd = ThreadingHTTPServer((self.host, 0), handler_cls)
+            self._httpd.daemon_threads = True
             self.port = int(self._httpd.server_address[1])
             self._write_daemon_info()
 
@@ -1143,6 +1174,7 @@ class VmrDaemon:
     def stop(self) -> None:
         self._stop_event.set()
         self.wake_worker()
+        self.broadcaster.close_all()
         if self._httpd is not None:
             try:
                 self._httpd.shutdown()

@@ -26,6 +26,8 @@ class TestWebUI(unittest.TestCase):
                 self.assertIn("X-VMR-Token", js)
                 self.assertIn("/api/v1/events", js)
                 self.assertIn("history.replaceState", js)
+                self.assertIn("[hidden]", css)
+                self.assertIn("display: none !important", css)
                 self.assertGreater(len(css), 400)
             finally:
                 daemon.stop()

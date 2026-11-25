@@ -135,7 +135,7 @@ class TestFinalReviewFixes(unittest.TestCase):
     # I1: 远程更新缺少 SHA256 必须拒绝；pyproject 版本为 1.0.0；build_release 无本机个人绝对路径
     def test_i1_updater_requires_sha256_for_remote_and_pyproject_version(self) -> None:
         repo = Path(__file__).resolve().parent.parent
-        self.assertIn('version = "1.0.0"', (repo / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertIn(f'version = "{voice_review.__version__}"', (repo / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertNotIn("/Users/", (repo / "scripts" / "build_release.sh").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as tmp_s:
             tmp = Path(tmp_s)
