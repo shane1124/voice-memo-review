@@ -297,6 +297,7 @@ class RuleStudio:
         transcript_text: str | None = None,
         transcript_path: Path | None = None,
         analysis_path: Path | None = None,
+        extra_sections: list[str] | tuple[str, ...] | None = None,
     ) -> str:
         """透明拼装最终发送给分析模型的完整 Prompt（所有引擎与 UI 预览共用同一口径）。"""
         tpl = self.get_template(template_id)
@@ -318,6 +319,12 @@ class RuleStudio:
 
         if persona:
             parts.extend(["", "## 用户背景说明", persona])
+
+        if extra_sections:
+            for sec in extra_sections:
+                clean_sec = str(sec or "").strip()
+                if clean_sec:
+                    parts.extend(["", clean_sec])
 
         parts.extend(["", f"## 分析规则（模板：{tpl.name}）", tpl.body])
 

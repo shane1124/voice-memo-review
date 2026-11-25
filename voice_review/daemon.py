@@ -40,6 +40,7 @@ from voice_review.config import (
     validate_provider_combo,
 )
 from voice_review.diarizer import FluidAudioDiarizer, NoSpeechDetectedError, VoiceprintStore
+from voice_review.extensions import ExtensionManager
 from voice_review.rules import RuleStudio
 from voice_review.secrets import SecretStore
 from voice_review.sources import AudioCandidate, MultiSourceScanner
@@ -156,6 +157,7 @@ class PipelineExecutor:
         self.secrets = secrets or SecretStore(cfg.secrets_path)
         self.rules = rules or RuleStudio(cfg.rules_dir)
         self.rules.ensure_initialized()
+        self.extensions = ExtensionManager.from_vmr_home(cfg.vmr_home)
         self._on_event = on_event
 
     def reload_config(self, cfg: VoiceReviewConfig) -> None:
@@ -163,6 +165,7 @@ class PipelineExecutor:
         self.secrets = SecretStore(cfg.secrets_path)
         self.rules = RuleStudio(cfg.rules_dir)
         self.rules.ensure_initialized()
+        self.extensions = ExtensionManager.from_vmr_home(cfg.vmr_home)
 
     def _emit(self, event: str, data: dict[str, Any]) -> None:
         if self._on_event:
@@ -304,8 +307,26 @@ class PipelineExecutor:
         if wf_path is None and not transcript_path.is_file():
             return AnalysisOutcome(False, "failed", None, error=f"转录稿不存在：{transcript_path}")
 
-        self.store.update(recording_id, status="analyzing", template_id=template_id or rec.template_id or self.cfg.default_template_id, last_error="")
+        eff_tpl_id = template_id or rec.template_id or self.cfg.default_template_id
+        self.store.update(recording_id, status="analyzing", template_id=eff_tpl_id, last_error="")
         self._emit("job", {"recording_id": recording_id, "status": "analyzing"})
+
+        extra_sections = tuple(
+            self.extensions.run_before_prompt(
+                {
+                    "recording_id": rec.recording_id,
+                    "title": rec.title,
+                    "recorded_at": rec.recorded_at,
+                    "duration_sec": rec.duration_sec,
+                    "speakers_summary": rec.speakers_summary,
+                    "transcript_path": str(transcript_path),
+                    "analysis_path": str(analysis_path),
+                    "template_id": eff_tpl_id,
+                    "vmr_home": str(self.cfg.vmr_home),
+                    "output_dir": str(self.cfg.output_dir),
+                }
+            )
+        )
 
         analyzer = get_analyzer(self.cfg, self.secrets, self.store, self.rules, override_provider=override_provider)
         outcome = analyzer.analyze(
@@ -317,21 +338,37 @@ class PipelineExecutor:
                 speakers_summary=rec.speakers_summary,
                 transcript_path=transcript_path,
                 analysis_path=analysis_path,
-                template_id=template_id or rec.template_id or self.cfg.default_template_id,
+                template_id=eff_tpl_id,
                 workflow_script_path=wf_path,
                 batch_count=rec.batch_count,
                 segment_count=rec.segment_count,
+                extra_prompt_sections=extra_sections,
             )
         )
         if outcome.ok:
+            final_analysis_path = str(outcome.analysis_path) if outcome.analysis_path else rec.analysis_path
             self.store.update(
                 recording_id,
                 status=outcome.status,
-                analysis_path=str(outcome.analysis_path) if outcome.analysis_path else rec.analysis_path,
+                analysis_path=final_analysis_path,
                 last_error="",
                 reset_retry=True,
             )
             self._emit("job", {"recording_id": recording_id, "status": outcome.status})
+            if outcome.status == "done" and final_analysis_path:
+                self.extensions.run_after_analysis(
+                    {
+                        "recording_id": rec.recording_id,
+                        "title": rec.title,
+                        "recorded_at": rec.recorded_at,
+                        "duration_sec": rec.duration_sec,
+                        "transcript_path": str(transcript_path),
+                        "analysis_path": final_analysis_path,
+                        "template_id": eff_tpl_id,
+                        "vmr_home": str(self.cfg.vmr_home),
+                        "output_dir": str(self.cfg.output_dir),
+                    }
+                )
         else:
             new_st = self.store.record_failure(recording_id, outcome.error, retry_stage="transcribed" if wf_path is None else "prepared")
             self._emit("job", {"recording_id": recording_id, "status": new_st, "error": outcome.error})
@@ -588,7 +625,6 @@ class VmrDaemon:
         return enqueued
 
     def _worker_loop(self) -> None:
-        self.store.reset_in_flight()
         kq = select.kqueue() if hasattr(select, "kqueue") else None
         wake_r, wake_w = os.pipe()
         os.set_blocking(wake_r, False)
@@ -635,6 +671,7 @@ class VmrDaemon:
                     0,
                     0,
                 )
+            last_ext_tick = 0.0
             while not self._stop_event.is_set():
                 # 源扫描与队列消费彻底异常隔离：即使无全盘权限也绝不阻塞投放箱或手动上传任务
                 try:
@@ -651,6 +688,25 @@ class VmrDaemon:
                         self.executor.process_one(nxt, auto_analyze=nxt.auto_analyze)
                 except Exception as exc:
                     logger.exception("后台队列任务处理异常：%s", exc)
+
+                # 本地私有扩展低频定时心跳（默认每 60s 触发一次，无扩展时零开销）
+                now_mono = time.monotonic()
+                if now_mono - last_ext_tick >= 60.0:
+                    last_ext_tick = now_mono
+                    try:
+                        self.executor.extensions.run_daemon_tick(
+                            {
+                                "now_ts": time.time(),
+                                "vmr_home": str(self.cfg.vmr_home),
+                                "output_dir": str(self.cfg.output_dir),
+                                "cfg": self.cfg,
+                                "store": self.store,
+                                "rules": self.rules,
+                                "broadcaster": self.broadcaster,
+                            }
+                        )
+                    except Exception as exc:
+                        logger.warning("本地扩展心跳异常（已隔离）：%s", exc)
 
                 wait_sec = 2.0 if self._pending else (30.0 if kq is not None else 5.0)
                 if kq is not None:
@@ -910,6 +966,11 @@ class VmrDaemon:
                         self._send_json(200, {"clients": {}, "error": str(exc)})
                     return
 
+                if path == "/api/v1/extensions":
+                    exts = [e.to_dict() for e in daemon.executor.extensions.list_extensions()]
+                    self._send_json(200, {"extensions": exts})
+                    return
+
                 if path == "/api/v1/update/check":
                     try:
                         from voice_review.updater import SelfUpdater
@@ -969,6 +1030,16 @@ class VmrDaemon:
                     if "persona" in body:
                         daemon.rules.save_persona(str(body.get("persona") or ""))
                     self._send_json(200, {"ok": True})
+                    return
+
+                m_ext = re.fullmatch(r"/api/v1/extensions/([^/]+)", path)
+                if m_ext:
+                    try:
+                        ext_id = urllib.parse.unquote(m_ext.group(1))
+                        updated = daemon.executor.extensions.set_enabled(ext_id, bool(body.get("enabled", True)))
+                        self._send_json(200, {"ok": True, "extension": updated.to_dict()})
+                    except Exception as exc:
+                        self._send_json(400, {"ok": False, "error": str(exc)})
                     return
 
                 if path == "/api/v1/autostart":
@@ -1164,13 +1235,30 @@ class VmrDaemon:
                 if path == "/api/v1/templates/preview":
                     try:
                         draft_body = body.get("body")
+                        sample_title = str(body.get("title") or "示例项目周会")
+                        sample_rec_at = datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat()
+                        extra_secs = daemon.executor.extensions.run_before_prompt(
+                            {
+                                "recording_id": "preview",
+                                "title": sample_title,
+                                "recorded_at": sample_rec_at,
+                                "duration_sec": 1800.0,
+                                "speakers_summary": "- SPEAKER_00 -> 已确认真名：说话人A（约 15.0 分钟）",
+                                "transcript_path": str(daemon.cfg.transcripts_dir / "示例｜转录稿.md"),
+                                "analysis_path": str(daemon.cfg.output_dir / "示例｜分析稿.md"),
+                                "template_id": str(body.get("template_id") or daemon.cfg.default_template_id),
+                                "vmr_home": str(daemon.cfg.vmr_home),
+                                "output_dir": str(daemon.cfg.output_dir),
+                                "is_preview": True,
+                            }
+                        )
                         if isinstance(draft_body, str) and draft_body.strip():
                             tpl_name = str(body.get("name") or body.get("template_id") or "当前编辑模板")
                             persona = daemon.rules.get_persona()
                             parts = [
                                 "## 录音元数据",
-                                f"- **录制时间**：{datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat()}",
-                                f"- **标题**：{str(body.get('title') or '示例项目周会')}",
+                                f"- **录制时间**：{sample_rec_at}",
+                                f"- **标题**：{sample_title}",
                                 "- **音频时长**：30分00秒",
                                 f"- **选用分析模板**：{tpl_name}（草稿实时预览）",
                                 "- **声纹与说话人概况**：",
@@ -1178,17 +1266,20 @@ class VmrDaemon:
                             ]
                             if persona:
                                 parts.extend(["", "## 用户背景说明", persona])
+                            for sec in extra_secs:
+                                parts.extend(["", sec])
                             parts.extend(["", f"## 分析规则（模板：{tpl_name}）", draft_body.strip()])
                             parts.extend(["", "## 完整转录稿正文", str(body.get("sample_transcript") or "## 00:00:05 **说话人A**\n（此处将填入完整转录稿正文）")])
                             prompt = "\n".join(parts).strip() + "\n"
                         else:
                             prompt = daemon.rules.compose_analysis_prompt(
                                 template_id=body.get("template_id"),
-                                title=str(body.get("title") or "示例项目周会"),
-                                recorded_at=datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat(),
+                                title=sample_title,
+                                recorded_at=sample_rec_at,
                                 duration_sec=1800.0,
                                 speakers_summary="- SPEAKER_00 -> 已确认真名：说话人A（约 15.0 分钟）",
                                 transcript_text=str(body.get("sample_transcript") or "## 00:00:05 **说话人A**\n（此处将填入完整转录稿正文）"),
+                                extra_sections=extra_secs,
                             )
                     except Exception as exc:
                         self._send_json(400, {"ok": False, "error": str(exc)})
@@ -1295,6 +1386,7 @@ class VmrDaemon:
             self._httpd.daemon_threads = True
             self.port = int(self._httpd.server_address[1])
             self._write_daemon_info()
+            self.store.reset_in_flight()
 
             self._http_thread = threading.Thread(target=self._httpd.serve_forever, daemon=True, name="vmr-http")
             self._http_thread.start()

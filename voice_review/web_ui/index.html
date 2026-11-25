@@ -17,7 +17,7 @@
           </svg>
         </span>
         <span class="brand-name">语音复盘</span>
-        <span class="brand-ver" id="appVersion">v1.2.0</span>
+        <span class="brand-ver" id="appVersion">v1.3.0</span>
       </div>
 
       <nav class="nav" aria-label="主导航">
@@ -377,6 +377,15 @@
             <div id="clientsGrid" class="settings-card clean-list"></div>
           </div>
 
+          <!-- 仅当本机挂载了私有扩展时自动展示，默认对外部最小闭环用户完全隐藏 -->
+          <div class="settings-group" id="localExtensionsGroup" hidden>
+            <div class="group-head">
+              <div class="group-title">本机私有扩展</div>
+              <span class="job-meta">仅存本机数据目录，不同步 GitHub</span>
+            </div>
+            <div id="extensionsGrid" class="settings-card clean-list"></div>
+          </div>
+
           <div class="settings-group">
             <div class="group-head">
               <div class="group-title">版本更新</div>
@@ -387,7 +396,7 @@
             </div>
             <div class="settings-card">
               <div class="setting-row update-row" id="updateStatus">
-                当前运行版本 <strong id="updateCurrentVer">v1.2.0</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>（守护每 24 小时静默检查一次）
+                当前运行版本 <strong id="updateCurrentVer">v1.3.0</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>（守护每 24 小时静默检查一次）
               </div>
             </div>
           </div>

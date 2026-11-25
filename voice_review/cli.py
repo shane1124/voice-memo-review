@@ -20,6 +20,7 @@ from voice_review.daemon import (
     discover_running_daemon,
 )
 from voice_review.diarizer import FluidAudioDiarizer, VoiceprintStore
+from voice_review.extensions import ExtensionManager
 from voice_review.installer import ClientInstaller
 from voice_review.mcp_server import McpStdioServer
 from voice_review.rules import RuleStudio
@@ -67,6 +68,11 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
     rules = RuleStudio(cfg.rules_dir)
     rules.ensure_initialized()
     print(f"  📋 显化规则模板 ({cfg.rules_dir}): {len(rules.list_templates())} 套（默认：{rules.get_template().id}）")
+    exts = ExtensionManager.from_vmr_home(cfg.vmr_home).list_extensions()
+    if exts:
+        enabled_cnt = sum(1 for e in exts if e.enabled)
+        names_txt = ", ".join(f"{e.id}({'开' if e.enabled else '关'})" for e in exts)
+        print(f"  🧩 本机私有扩展 ({cfg.vmr_home / 'extensions'}): {enabled_cnt}/{len(exts)} 已启用 -> {names_txt}")
     return 0 if all_ok else 1
 
 
@@ -200,6 +206,34 @@ def _cmd_install(targets: list[str] | None, uninstall: bool) -> int:
     return 0 if all_ok else 1
 
 
+def _cmd_extensions(cfg: VoiceReviewConfig, action: str, ext_id: str | None) -> int:
+    mgr = ExtensionManager.from_vmr_home(cfg.vmr_home)
+    if action == "list":
+        exts = mgr.list_extensions()
+        if not exts:
+            print(f"当前无本机私有扩展（目录：{mgr.extensions_dir}）。")
+            return 0
+        print(f"本机私有扩展（{mgr.extensions_dir}）：")
+        for e in exts:
+            mark = "✅ 启用" if e.enabled else "⏸️ 停用"
+            err = f" [错误：{e.error}]" if e.error else ""
+            print(f"  - {e.id:<20} {mark}  {e.name} — {e.description}{err}")
+        return 0
+    if action in ("enable", "disable"):
+        if not ext_id:
+            print("❌ 请指定扩展 ID，例如：vmr extensions enable my_ext")
+            return 1
+        try:
+            updated = mgr.set_enabled(ext_id, action == "enable")
+            print(f"✅ 已{'启用' if updated.enabled else '停用'}本机扩展：{updated.id}（{updated.name}）")
+            return 0
+        except Exception as exc:
+            print(f"❌ {exc}")
+            return 1
+    print(f"❌ 未知动作：{action}")
+    return 1
+
+
 def _cmd_autostart(cfg: VoiceReviewConfig, action: str) -> int:
     mgr = AutostartManager.default(cfg.vmr_home)
     if action == "status":
@@ -323,6 +357,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_auto = sub.add_parser("autostart", help="管理 macOS 开机后台自启（launchd LaunchAgent）")
     p_auto.add_argument("action", nargs="?", default="status", choices=("on", "off", "status"), help="on 开启 / off 关闭 / status 查看状态")
 
+    p_ext = sub.add_parser("extensions", help="查看或启停本机私有扩展模块（位于 VMR_HOME/extensions）")
+    p_ext.add_argument("action", nargs="?", default="list", choices=("list", "enable", "disable"))
+    p_ext.add_argument("ext_id", nargs="?", default=None)
+
     p_enroll = sub.add_parser("enroll", help="从 10~30 秒清晰单人样音注册声纹")
     p_enroll.add_argument("name", help="说话人名称")
     p_enroll.add_argument("audio", type=Path, help="单人清晰样音文件")
@@ -389,6 +427,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_update(cfg, args.check, args.archive, args.sha256, force=args.force)
     if args.cmd == "autostart":
         return _cmd_autostart(cfg, args.action)
+    if args.cmd == "extensions":
+        return _cmd_extensions(cfg, args.action, args.ext_id)
     if args.cmd == "_restart-helper":
         mgr = AutostartManager.default(cfg.vmr_home)
         return run_restart_helper(

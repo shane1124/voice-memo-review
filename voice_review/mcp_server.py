@@ -430,6 +430,19 @@ class McpStdioServer:
                 last_error="",
                 reset_retry=True,
             )
+            self.executor.extensions.run_after_analysis(
+                {
+                    "recording_id": rec_id,
+                    "title": rec.title,
+                    "recorded_at": rec.recorded_at,
+                    "duration_sec": rec.duration_sec,
+                    "transcript_path": rec.transcript_path,
+                    "analysis_path": str(analysis_path),
+                    "template_id": str(args.get("template_id") or rec.template_id or self.cfg.default_template_id),
+                    "vmr_home": str(self.cfg.vmr_home),
+                    "output_dir": str(self.cfg.output_dir),
+                }
+            )
             return {"ok": True, "recording_id": rec_id, "analysis_path": str(analysis_path)}, False
 
         if name == "vmr_manage_voiceprints":
@@ -502,6 +515,20 @@ class McpStdioServer:
         }
         if rec.status in ("awaiting_analysis", "transcribed", "prepared", "done"):
             tpl_id = template_id or rec.template_id or self.cfg.default_template_id
+            extra_sections = self.executor.extensions.run_before_prompt(
+                {
+                    "recording_id": rec.recording_id,
+                    "title": rec.title,
+                    "recorded_at": rec.recorded_at,
+                    "duration_sec": rec.duration_sec,
+                    "speakers_summary": rec.speakers_summary,
+                    "transcript_path": rec.transcript_path,
+                    "analysis_path": rec.analysis_path,
+                    "template_id": tpl_id,
+                    "vmr_home": str(self.cfg.vmr_home),
+                    "output_dir": str(self.cfg.output_dir),
+                }
+            )
             payload["analysis_prompt"] = self.rules.compose_analysis_prompt(
                 template_id=tpl_id,
                 title=rec.title,
@@ -510,6 +537,7 @@ class McpStdioServer:
                 speakers_summary=rec.speakers_summary,
                 transcript_path=Path(rec.transcript_path) if rec.transcript_path else None,
                 analysis_path=Path(rec.analysis_path) if rec.analysis_path else None,
+                extra_sections=extra_sections,
             )
             if rec.workflow_script_path:
                 payload["next_step"] = (

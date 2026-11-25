@@ -74,6 +74,7 @@ def render_v2_review_prompt(
     segment_count: int,
     rules: "RuleStudio | None" = None,
     template_id: str | None = None,
+    extra_sections: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     """拼装发给 Antigravity 的两步执行指令（优先采用 RuleStudio 显化模板并引导定义轻量子代理）。"""
     dur_text = format_duration_cn(duration_sec)
@@ -82,6 +83,11 @@ def render_v2_review_prompt(
         tpl = rules.get_template(template_id or cfg.default_template_id)
         persona = rules.get_persona()
         persona_block = f"\n## 用户背景说明\n{persona}\n" if persona else ""
+        extra_block = ""
+        if extra_sections:
+            cleaned_extras = [str(s).strip() for s in extra_sections if str(s or "").strip()]
+            if cleaned_extras:
+                extra_block = "\n" + "\n\n".join(cleaned_extras) + "\n"
         return (
             "你收到一条已完成本地声纹分离与 V2 物理切段的新录音任务，请严格按步骤完成「并发精转 → 按显化规则深度复盘」：\n\n"
             "## 录音元数据\n"
@@ -95,7 +101,7 @@ def render_v2_review_prompt(
             f"- **并发精转工作流脚本**：`{workflow_script_path.resolve()}`\n"
             f"- **目标转录稿路径**：`{transcript_path.resolve()}`\n"
             f"- **目标复盘分析稿路径**：`{analysis_path.resolve()}`\n"
-            f"{persona_block}\n"
+            f"{persona_block}{extra_block}\n"
             "## 执行步骤\n"
             f"{_LITE_SUBAGENT_GUIDE}"
             f"1. **第一步（零漂移并发精转，带语气捕捉）**：调用 `run_workflow(ScriptPath=\"{workflow_script_path.resolve()}\", Description=\"并发精转：{title}\")`；"

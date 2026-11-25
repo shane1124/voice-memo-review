@@ -34,6 +34,7 @@ class AnalysisRequest:
     workflow_script_path: Path | None = None
     batch_count: int = 0
     segment_count: int = 0
+    extra_prompt_sections: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ class McpHostAnalyzer(AnalyzerProvider):
             speakers_summary=req.speakers_summary,
             transcript_path=req.transcript_path,
             analysis_path=req.analysis_path,
+            extra_sections=req.extra_prompt_sections,
         )
         return AnalysisOutcome(
             ok=True,
@@ -130,6 +132,7 @@ class AntigravityAgentAnalyzer(AnalyzerProvider):
                 segment_count=req.segment_count,
                 rules=self.rules,
                 template_id=req.template_id,
+                extra_sections=req.extra_prompt_sections,
             )
         else:
             prompt = self.rules.compose_analysis_prompt(
@@ -140,6 +143,7 @@ class AntigravityAgentAnalyzer(AnalyzerProvider):
                 speakers_summary=req.speakers_summary,
                 transcript_path=req.transcript_path,
                 analysis_path=req.analysis_path,
+                extra_sections=req.extra_prompt_sections,
             ) + (
                 f"\n请用 `read_file` 读取 `{req.transcript_path.resolve()}`，"
                 f"按上述显化规则完成分析，并用 `write_file(Overwrite=true)` 写入 `{req.analysis_path.resolve()}`。\n"
@@ -235,6 +239,7 @@ class OpenAICompatibleLlmAnalyzer(AnalyzerProvider):
                     duration_sec=req.duration_sec,
                     speakers_summary=req.speakers_summary,
                     transcript_text=transcript_text,
+                    extra_sections=req.extra_prompt_sections,
                 )
                 result_md = self._chat(sys_msg, prompt)
             else:
@@ -254,6 +259,7 @@ class OpenAICompatibleLlmAnalyzer(AnalyzerProvider):
                     duration_sec=req.duration_sec,
                     speakers_summary=req.speakers_summary,
                     transcript_text=merged_input,
+                    extra_sections=req.extra_prompt_sections,
                 )
                 result_md = self._chat(sys_msg, final_prompt)
         except Exception as exc:
@@ -292,6 +298,7 @@ class GeminiLlmAnalyzer(AnalyzerProvider):
                 duration_sec=req.duration_sec,
                 speakers_summary=req.speakers_summary,
                 transcript_text=transcript_text,
+                extra_sections=req.extra_prompt_sections,
             )
             key = self._api_key()
             url = f"{self.base_url}/models/{self.model}:generateContent?key={key}"
@@ -423,6 +430,7 @@ class CodexCliAnalyzer(AnalyzerProvider):
                     duration_sec=req.duration_sec,
                     speakers_summary=req.speakers_summary,
                     transcript_text=transcript_text,
+                    extra_sections=req.extra_prompt_sections,
                 )
                 result_md = self._run_codex(prompt, work_cwd=self.cfg.output_dir)
             else:
@@ -443,6 +451,7 @@ class CodexCliAnalyzer(AnalyzerProvider):
                     duration_sec=req.duration_sec,
                     speakers_summary=req.speakers_summary,
                     transcript_text="\n\n".join(partials),
+                    extra_sections=req.extra_prompt_sections,
                 )
                 result_md = self._run_codex(final_prompt, work_cwd=self.cfg.output_dir)
         except Exception as exc:
@@ -513,6 +522,7 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
                     duration_sec=req.duration_sec,
                     speakers_summary=req.speakers_summary,
                     transcript_text=transcript_text,
+                    extra_sections=req.extra_prompt_sections,
                 )
                 result_md = self._run_claude(prompt)
             else:
@@ -533,6 +543,7 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
                     duration_sec=req.duration_sec,
                     speakers_summary=req.speakers_summary,
                     transcript_text="\n\n".join(partials),
+                    extra_sections=req.extra_prompt_sections,
                 )
                 result_md = self._run_claude(final_prompt)
         except Exception as exc:

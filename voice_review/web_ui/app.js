@@ -151,7 +151,9 @@
       document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
       btn.classList.add("active");
       $(`#view-${btn.dataset.view}`).classList.add("active");
-      if (btn.dataset.view === "integrations") loadIntegrations().catch((e) => showToast(e.message, true));
+      if (btn.dataset.view === "integrations") {
+        Promise.all([loadIntegrations(), loadLocalExtensions()]).catch((e) => showToast(e.message, true));
+      }
       if (btn.dataset.view === "rules") {
         Promise.all([loadTemplates(), loadRuleMeta(), loadVoiceprints()]).catch((e) => showToast(e.message, true));
       }
@@ -791,7 +793,61 @@
     });
   }
 
-  $("#refreshIntegrationsBtn").addEventListener("click", () => loadIntegrations().catch((e) => showToast(e.message, true)));
+  $("#refreshIntegrationsBtn").addEventListener("click", () => {
+    Promise.all([loadIntegrations(), loadLocalExtensions()]).catch((e) => showToast(e.message, true));
+  });
+
+  async function loadLocalExtensions() {
+    const grp = $("#localExtensionsGroup");
+    const box = $("#extensionsGrid");
+    if (!grp || !box) return;
+    try {
+      const data = await apiFetch("/api/v1/extensions");
+      const exts = data.extensions || [];
+      if (!exts.length) {
+        grp.hidden = true;
+        return;
+      }
+      grp.hidden = false;
+      box.innerHTML = exts.map((e) => {
+        const hooksTxt = (e.hooks || []).join(" · ");
+        const errTxt = e.error ? ` · 异常：${escapeHtml(e.error)}` : "";
+        return `
+          <div class="client-row">
+            <div class="client-info">
+              <div class="client-name">${escapeHtml(e.name || e.id)}</div>
+              <div class="client-path">${escapeHtml(e.description || e.id)}${hooksTxt ? `（${escapeHtml(hooksTxt)}）` : ""}${errTxt}</div>
+            </div>
+            <div class="client-right">
+              <label class="switch-pill">
+                <input type="checkbox" data-ext-toggle="${escapeHtml(e.id)}" ${e.enabled ? "checked" : ""} />
+                <span>${e.enabled ? "已启用" : "已停用"}</span>
+              </label>
+            </div>
+          </div>
+        `;
+      }).join("");
+      box.querySelectorAll("[data-ext-toggle]").forEach((cb) => {
+        cb.addEventListener("change", async () => {
+          const id = cb.dataset.extToggle;
+          const want = cb.checked;
+          try {
+            await apiFetch(`/api/v1/extensions/${encodeURIComponent(id)}`, {
+              method: "PUT",
+              body: { enabled: want },
+            });
+            showToast(`本机扩展 ${id} 已${want ? "启用" : "停用"}`);
+            await loadLocalExtensions();
+          } catch (err) {
+            cb.checked = !want;
+            showToast(err.message, true);
+          }
+        });
+      });
+    } catch (_) {
+      grp.hidden = true;
+    }
+  }
   $("#installAllClientsBtn").addEventListener("click", async () => {
     try {
       await apiFetch("/api/v1/integrations/install", { method: "POST", body: {} });
