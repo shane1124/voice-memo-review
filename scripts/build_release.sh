@@ -10,6 +10,14 @@ STAGE_DIR="$DIST_DIR/$STAGE_NAME"
 ARCHIVE_NAME="vmr-macos-arm64-v${VERSION}.tar.gz"
 
 FLUIDAUDIO_BIN="${FLUIDAUDIO_BIN:-$(command -v fluidaudiocli 2>/dev/null || true)}"
+if [ -z "${FLUIDAUDIO_BIN}" ]; then
+  for cand in "$HOME/.local/share/voice-memo-review/bin/fluidaudiocli" "$HOME/.local/bin/fluidaudiocli"; do
+    if [ -x "$cand" ]; then
+      FLUIDAUDIO_BIN="$cand"
+      break
+    fi
+  done
+fi
 FLUIDAUDIO_MODELS_DIR="${FLUIDAUDIO_MODELS_DIR:-$HOME/Library/Application Support/FluidAudio/Models/speaker-diarization}"
 STATIC_FFMPEG_BIN="${STATIC_FFMPEG_BIN:-}"
 STATIC_FFPROBE_BIN="${STATIC_FFPROBE_BIN:-}"
@@ -41,7 +49,7 @@ if [ -x "$FLUIDAUDIO_BIN" ]; then
   chmod +x "$STAGE_DIR/bin/fluidaudiocli"
   echo "✅ 已打入预编译 fluidaudiocli（$(du -sh "$STAGE_DIR/bin/fluidaudiocli" | awk '{print $1}')）"
 else
-  echo "⚠️ 未找到 fluidaudiocli（$FLUIDAUDIO_BIN），分发包将不含预编译声纹引擎。"
+  echo "⚠️ 未找到 fluidaudiocli（${FLUIDAUDIO_BIN}），分发包将不含预编译声纹引擎。"
 fi
 
 # 打包 21MB Core ML 离线声纹模型
@@ -49,7 +57,7 @@ if [ -d "$FLUIDAUDIO_MODELS_DIR" ]; then
   cp -R "$FLUIDAUDIO_MODELS_DIR" "$STAGE_DIR/models/speaker-diarization"
   echo "✅ 已打入离线 Core ML 声纹模型（$(du -sh "$STAGE_DIR/models/speaker-diarization" | awk '{print $1}')）"
 else
-  echo "⚠️ 未找到离线声纹模型目录（$FLUIDAUDIO_MODELS_DIR），首次运行将自动联网下载。"
+  echo "⚠️ 未找到离线声纹模型目录（${FLUIDAUDIO_MODELS_DIR}），首次运行将自动联网下载。"
 fi
 
 # 可选打入静态 arm64 ffmpeg / ffprobe（建议对外发布时通过环境变量传入纯静态构建版）
