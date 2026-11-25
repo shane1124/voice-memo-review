@@ -33,7 +33,7 @@ def _tool_defs() -> list[dict[str, Any]]:
     return [
         {
             "name": "vmr_status",
-            "description": "查看本地语音复盘环境状态、当前启用的转写/分析插槽配置与队列概览。",
+            "description": "查看本地录音自动分析环境状态、当前启用的转写/分析插槽配置与队列概览。",
             "inputSchema": {"type": "object", "properties": {}},
         },
         {

@@ -1,4 +1,4 @@
-"""voice-memo-review：规则显化、四插槽可插拔的语音复盘引擎与跨 AI 插件（保持既有顶级导出完全向后兼容）。"""
+"""voice-memo-review：规则显化、四插槽可插拔的录音自动分析引擎与跨 AI 插件（保持既有顶级导出完全向后兼容）。"""
 from __future__ import annotations
 
 from voice_review.config import VoiceReviewConfig, load_config
@@ -26,7 +26,7 @@ from voice_review.workflow_builder import (
     sanitize_transcript_field,
 )
 
-__version__ = "1.3.1"
+__version__ = "1.3.2"
 
 __all__ = [
     "DiarizationResult",

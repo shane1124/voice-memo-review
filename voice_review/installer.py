@@ -254,9 +254,9 @@ class ClientInstaller:
             json.dumps(
                 {
                     "name": PLUGIN_NAME,
-                    "displayName": "语音复盘助手",
+                    "displayName": "录音自动分析助手",
                     "version": __version__,
-                    "description": "可插拔本地声纹切段、多引擎转写与显化规则语音复盘插件。",
+                    "description": "可插拔本地声纹切段、多引擎转写与显化规则录音自动分析插件。",
                 },
                 ensure_ascii=False,
                 indent=2,

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>语音复盘 · Voice Memo Review</title>
+  <title>录音自动分析</title>
   <link rel="stylesheet" href="/assets/style.css" />
 </head>
 <body>
@@ -16,8 +16,8 @@
             <path d="M5 10v4M9 6v12M13 4v16M17 8v8M21 11v2"/>
           </svg>
         </span>
-        <span class="brand-name">语音复盘</span>
-        <span class="brand-ver" id="appVersion">v1.3.1</span>
+        <span class="brand-name">录音自动分析</span>
+        <span class="brand-ver" id="appVersion">v1.3.2</span>
       </div>
 
       <nav class="nav" aria-label="主导航">
@@ -113,7 +113,7 @@
           <!-- 极简任务记录列表 -->
           <div class="section-block">
             <div class="section-head">
-              <h2>最近复盘</h2>
+              <h2>最近分析</h2>
               <button class="btn text-btn" id="refreshJobsBtn" type="button">刷新</button>
             </div>
             <div id="jobsList" class="clean-list">
@@ -148,7 +148,7 @@
               <div class="setting-row">
                 <label class="field">
                   <span>投放文件夹路径（无需 iCloud，拖入即自动处理）</span>
-                  <input type="text" id="cfgDropDir" placeholder="~/Desktop/语音复盘投放箱" />
+                  <input type="text" id="cfgDropDir" placeholder="~/Desktop/录音自动分析投放箱" />
                 </label>
               </div>
               <div class="setting-row">
@@ -265,7 +265,7 @@
           <header class="page-head row-head">
             <div>
               <h1>规则工作室</h1>
-              <p class="subtitle">所有复盘提示词、专名词表与声纹完全明文透明，随时改写并预览最终 Prompt。</p>
+              <p class="subtitle">所有分析提示词、专名词表与声纹完全明文透明，随时改写并预览最终 Prompt。</p>
             </div>
             <div class="seg-tabs" role="tablist">
               <button class="seg-btn active" data-rules-tab="templates" type="button">分析模板</button>
@@ -396,7 +396,7 @@
             </div>
             <div class="settings-card">
               <div class="setting-row update-row" id="updateStatus">
-                当前运行版本 <strong id="updateCurrentVer">v1.3.1</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>（守护每 24 小时静默检查一次）
+                当前运行版本 <strong id="updateCurrentVer">v1.3.2</strong> · 发布源 <code id="updateRepoLabel">shane1124/voice-memo-review</code>（守护每 24 小时静默检查一次）
               </div>
             </div>
           </div>
@@ -410,7 +410,7 @@
   <aside class="drawer" id="readerDrawer" hidden aria-label="文档阅读器">
     <div class="drawer-head">
       <div class="drawer-title-wrap">
-        <h2 id="drawerTitle">复盘阅读</h2>
+        <h2 id="drawerTitle">分析阅读</h2>
         <div class="seg-tabs compact" id="drawerTabs">
           <button class="seg-btn active" data-tab="analysis" type="button">分析稿</button>
           <button class="seg-btn" data-tab="transcript" type="button">转录稿</button>

@@ -174,7 +174,7 @@ class VoiceReviewConfig:
     rules_dir: Path = field(default_factory=lambda: default_vmr_home() / "rules")
     voice_memos_enabled: bool = True
     drop_folder_enabled: bool = False
-    drop_folder_dir: Path = field(default_factory=lambda: Path("~/Desktop/语音复盘投放箱").expanduser())
+    drop_folder_dir: Path = field(default_factory=lambda: Path("~/Desktop/录音自动分析投放箱").expanduser())
     drop_folder_archive_done: bool = False
     preprocessor_mode: str = "fluidaudio"
     uniform_chunk_sec: float = 600.0
@@ -236,7 +236,7 @@ def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None
         cand_prompt = (root / "prompts/review_default.md").resolve()
         review_prompt_path = cand_prompt if cand_prompt.is_file() else (pkg_root / "prompts/review_default.md").resolve()
 
-    drop_dir_raw = str(sources_raw.get("drop_folder_dir", "~/Desktop/语音复盘投放箱")).strip()
+    drop_dir_raw = str(sources_raw.get("drop_folder_dir", "~/Desktop/录音自动分析投放箱")).strip()
     trans_provider = str(trans_raw.get("provider", "antigravity-flash")).strip().lower() or "antigravity-flash"
     ana_provider = str(ana_raw.get("auto_provider", "antigravity-agentapi")).strip().lower() or "antigravity-agentapi"
     pre_mode = str(pre_raw.get("mode", "fluidaudio")).strip().lower() or "fluidaudio"
@@ -265,7 +265,7 @@ def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None
         fallback_poll_sec=float(raw.get("fallback_poll_sec", 300.0)),
         analysis_timeout_sec=float(raw.get("analysis_timeout_sec", 900.0)),
         model=str(raw.get("model", "gemini-4-neon-xhigh")),
-        conversation_title=str(raw.get("conversation_title", "语音复盘助手")),
+        conversation_title=str(raw.get("conversation_title", "录音自动分析助手")),
         rotation=str(raw.get("rotation", "weekly")),
         asr_context=str(raw.get("asr_context", "")).strip(),
         segmenter=seg_cfg,

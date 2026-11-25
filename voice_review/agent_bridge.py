@@ -132,7 +132,7 @@ def render_v2_review_prompt(
 
 def resolve_bucket(cfg: VoiceReviewConfig, recorded_at: str) -> tuple[str | None, str]:
     mode = (cfg.rotation or "weekly").strip().lower()
-    base = cfg.conversation_title or "语音复盘助手"
+    base = cfg.conversation_title or "录音自动分析助手"
     try:
         dt = datetime.fromisoformat(recorded_at)
         dt = dt.astimezone(SHANGHAI_TZ) if dt.tzinfo else dt.replace(tzinfo=SHANGHAI_TZ)

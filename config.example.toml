@@ -9,7 +9,7 @@ analysis_timeout_sec = 900
 
 # Antigravity 对话设置（仅当选用 antigravity-* 插槽时生效）
 model = "gemini-4-neon-xhigh"
-conversation_title = "语音复盘助手"
+conversation_title = "录音自动分析助手"
 rotation = "weekly"  # weekly | daily | per_recording | single
 
 # 插槽 1：音频输入源（可同时开启，不依赖 iCloud 也能用投放文件夹）
@@ -17,7 +17,7 @@ rotation = "weekly"  # weekly | daily | per_recording | single
 voice_memos_enabled = true
 recordings_dir = "~/Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
 drop_folder_enabled = true
-drop_folder_dir = "~/Desktop/语音复盘投放箱"
+drop_folder_dir = "~/Desktop/录音自动分析投放箱"
 drop_folder_archive_done = false
 
 # 插槽 2：本地预处理

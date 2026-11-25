@@ -229,7 +229,7 @@ class OpenAICompatibleLlmAnalyzer(AnalyzerProvider):
         except OSError as exc:
             return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=f"读取转录稿失败：{exc}")
         chunks = chunk_text_for_summary(transcript_text, max_chars=self.max_chunk_chars)
-        sys_msg = "你是一位严谨、客观的中文语音复盘分析专家，严格依据转录稿事实输出高质量 Markdown 文档。"
+        sys_msg = "你是一位严谨、客观的中文录音分析专家，严格依据转录稿事实输出高质量 Markdown 文档。"
         try:
             if len(chunks) <= 1:
                 prompt = self.rules.compose_analysis_prompt(
@@ -418,7 +418,7 @@ class CodexCliAnalyzer(AnalyzerProvider):
             return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=f"读取转录稿失败：{exc}")
         chunks = chunk_text_for_summary(transcript_text, max_chars=self.max_chunk_chars)
         header = (
-            "你是一位严谨、客观的中文语音复盘分析专家。"
+            "你是一位严谨、客观的中文录音分析专家。"
             "请直接输出最终完整的 Markdown 复盘正文（不要输出执行过程旁白，也不要尝试修改本地文件）。\n\n"
         )
         try:
@@ -510,7 +510,7 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
             return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=f"读取转录稿失败：{exc}")
         chunks = chunk_text_for_summary(transcript_text, max_chars=self.max_chunk_chars)
         header = (
-            "你是一位严谨、客观的中文语音复盘分析专家。"
+            "你是一位严谨、客观的中文录音分析专家。"
             "请直接输出最终完整的 Markdown 复盘正文（不要输出执行过程旁白）。\n\n"
         )
         try:

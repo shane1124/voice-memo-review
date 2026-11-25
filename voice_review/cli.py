@@ -318,7 +318,7 @@ def _cmd_update(cfg: VoiceReviewConfig, check_only: bool, archive: str | None, s
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="vmr",
-        description=f"voice-memo-review v{__version__}：规则显化、四插槽可插拔语音复盘引擎与跨 AI 插件",
+        description=f"voice-memo-review v{__version__}：规则显化、四插槽可插拔录音自动分析引擎与跨 AI 插件",
     )
     parser.add_argument("--config", type=Path, default=None, help="配置文件路径（默认读取 VMR_HOME/config.toml）")
     parser.add_argument("--vmr-home", type=Path, default=None, help="用户数据目录（默认 ~/.config/voice-memo-review）")
