@@ -27,7 +27,7 @@
 3. **一键接入 AI 客户端、环境体检与启动控制台**
    - 执行 `~/.local/bin/vmr install`，自动为本机检测到的 Antigravity / Claude Code / Codex / Cursor 写入 MCP Server（13 个工具）与通用 `SKILL.md`（自动备份既有配置为 `.bak`）。
    - 检查 `~/.local/bin` 是否在 shell `PATH` 中，缺失则补入 `~/.zshrc`。
-   - 执行 `~/.local/bin/vmr doctor`，记下本机实际检出的桌面端引擎环境：`Antigravity`、`Codex 桌面版`、`Claude 桌面版`、`FluidAudio`（`vmr` 会自动探测 `ChatGPT.app` / `Codex.app` 与 `Claude.app` 内部自带引擎，无需额外安装命令行工具）。
+   - 执行 `~/.local/bin/vmr doctor`，记下本机实际检出的桌面端引擎环境：`Antigravity 桌面版`、`Codex 桌面版`、`Claude 桌面版`、`FluidAudio`（`vmr` 全部优先直接调用各桌面 App 安装包内置本体，**完全无需用户安装任何外部 CLI 命令行工具**）。
    - **注意**：不要把「苹果语音备忘录目录存在」当成“已可自动同步”去打勾推荐——因为无法判断用户是否开启了 iCloud 语音备忘录同步以及 iCloud 额度是否充足，应在第 1 题里如实提醒前提条件。
    - 执行 `~/.local/bin/vmr ui` 打开本机极简控制台（仅监听 `127.0.0.1`）。
    - **暂不开启自动监听与开机自启**，等用户在第二阶段选定录音来源后再按选择启用。
@@ -92,7 +92,7 @@
    - 若用户直接口述了偏好，调用 `vmr_update_profile` 与 `vmr_save_template` 立即落盘；若用户回「先用内置示例」，则保留默认通用示例。
 3. **收尾核验并给出 3 句开箱指令**：
    - 运行 `~/.local/bin/vmr doctor` 确认全绿；
-   - **官方 Claude 桌面版 1 次授权收口**：若用户选了 **Claude 桌面版（`claude-cli`）** 且 `vmr doctor` 显示「Claude 桌面版 / CLI（尚未授权登录）」，说明官方 Claude 桌面版不向后台进程自动共享登录态——直接向用户解释「只需在浏览器点 1 次官方 Claude 授权，之后新录音即可免 Key 事件秒推、自动弹出 Claude 桌面版对话」，并帮用户执行 `~/.local/bin/vmr auth-claude`（或引导在控制台「引擎插槽」点击 **「一键登录官方 Claude 账号」**），完成后再跑一次 `vmr doctor` 确认变绿！
+   - **官方 Claude 桌面版 1 次授权收口**：若用户选了 **Claude 桌面版** 且 `vmr doctor` 显示「Claude 桌面版（尚未授权登录）」，说明官方 Claude 桌面版不向后台进程自动共享登录态——直接向用户解释「只需在浏览器点 1 次官方 Claude 授权，之后新录音即可免 Key 事件秒推、自动弹出 Claude 桌面版对话」，并帮用户执行 `~/.local/bin/vmr auth-claude`（或引导在控制台「引擎插槽」点击 **「一键登录官方 Claude 账号」**），完成后再跑一次 `vmr doctor` 确认变绿！
    - **macOS 苹果语音备忘录完全磁盘访问权限一步到位指引**：若用户选了 ①「苹果语音备忘录」且 `vmr doctor` 报「苹果语音备忘录读取权限 ❌」，**直接把 `vmr doctor` 输出的 `Python 真实路径`（如 `/opt/homebrew/Cellar/python@3.13/.../bin/python3.13`，切勿误导用户只加 `Python.app`！）** 发给用户，引导他去「系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 点＋按 ⌘⇧G 粘贴路径 → 开启开关」，完成后重启后台守护并再次 `vmr doctor` 核实变绿！
    - 提醒用户新开一条对话即可调用 13 个 MCP 工具，并给出 3 句顺手示例：
      - 「看看我今天最新那条录音，按我的专属模板整理重点」

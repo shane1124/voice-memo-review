@@ -170,6 +170,21 @@
     });
   });
 
+  const TR_LABELS = {
+    "antigravity-flash": "Antigravity 听写",
+    "gemini-api": "Gemini 听写",
+    "openai-compatible-asr": "云端 ASR",
+    "command-asr": "本机离线转写",
+  };
+  const AN_LABELS = {
+    "antigravity-agentapi": "Antigravity 桌面版",
+    "codex-cli": "Codex 桌面版",
+    "claude-cli": "Claude 桌面版",
+    "openai-compatible-llm": "外部大模型 API",
+    "gemini-llm": "Gemini API",
+    "none": "仅转写",
+  };
+
   // 状态加载
   async function loadStatus() {
     if (!TOKEN) {
@@ -186,7 +201,9 @@
       $("#updateCurrentVer").textContent = `v${st.version}`;
       $("#daemonDot").className = "status-dot online";
       $("#daemonLabel").textContent = st.watching ? "监听运行中" : "本地守护已就绪";
-      $("#engineMini").textContent = `${st.transcriber_provider} → ${st.analyzer_auto_provider}`;
+      const trName = TR_LABELS[st.transcriber_provider] || st.transcriber_provider;
+      const anName = AN_LABELS[st.analyzer_auto_provider] || st.analyzer_auto_provider;
+      $("#engineMini").textContent = `${trName} → ${anName}`;
       $("#toggleVoiceMemos").checked = Boolean(st.voice_memos_enabled);
       $("#toggleDropFolder").checked = Boolean(st.drop_folder_enabled);
       const autoPill = $("#autostartPill");

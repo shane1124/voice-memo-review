@@ -12,7 +12,13 @@ from unittest import mock
 import urllib.request
 
 from voice_review.cli import _cmd_doctor, build_parser
-from voice_review.config import check_claude_auth_status, load_config, save_config_dict
+from voice_review.config import (
+    check_claude_auth_status,
+    load_config,
+    resolve_antigravity_command,
+    resolve_codex_binary,
+    save_config_dict,
+)
 from voice_review.daemon import VmrDaemon
 from voice_review.installer import ClientInstaller
 from voice_review.mcp_server import McpStdioServer
@@ -158,6 +164,30 @@ if sys.argv[1:3] == ["auth", "status"]:
                     self.assertEqual(launched_cmd[1:], ["auth", "login", "--claudeai"])
             finally:
                 daemon.stop()
+
+    def test_desktop_app_builtin_takes_precedence_over_path_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_home = Path(tmp)
+            desktop_codex = _make_exec(
+                fake_home / "Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+                "#!/bin/sh\necho desktop-codex\n",
+            )
+            fake_ls = _make_exec(
+                fake_home / "Applications/Antigravity.app/Contents/Resources/bin/language_server",
+                "#!/bin/sh\necho agy-ls\n",
+            )
+            with (
+                mock.patch("pathlib.Path.home", return_value=fake_home),
+                mock.patch("shutil.which", return_value="/opt/homebrew/bin/codex"),
+                mock.patch(
+                    "voice_review.config._is_exec_file",
+                    side_effect=lambda p: str(p).startswith(str(fake_home)) and p.is_file() and os.access(p, os.X_OK),
+                ),
+            ):
+                # 即使系统 PATH 有外部 codex CLI，也优先走桌面 App 内置本体
+                self.assertEqual(resolve_codex_binary(""), str(desktop_codex.resolve()))
+                # Antigravity 桌面版内置 language_server 自动补传 agentapi 子命令
+                self.assertEqual(resolve_antigravity_command(""), [str(fake_ls.resolve()), "agentapi"])
 
 
 if __name__ == "__main__":

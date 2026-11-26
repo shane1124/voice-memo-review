@@ -95,71 +95,47 @@ def _is_exec_file(p: Path) -> bool:
 
 
 def resolve_codex_binary(raw: str = "") -> str | None:
-    """定位本机 Codex 引擎：优先显式路径/CLI，其次自动探测 Codex / ChatGPT 桌面版内置引擎。"""
+    """定位本机 Codex 桌面版内置引擎（优先桌面 App 本体，系统可执行文件仅作兜底）。"""
     val = (raw or "").strip()
-    if val:
+    if val and ("/" in val or "\\" in val):
         p = Path(val).expanduser()
-        if _is_exec_file(p):
-            return str(p.resolve())
-        hit = shutil.which(val)
-        if hit:
-            return hit
-        # 显式指定了具体路径（含路径分隔符）且不存在时不静默替换，避免掩盖误配置
-        if "/" in val or "\\" in val:
-            return None
-    for bdir in _managed_bin_dirs():
-        cand = bdir / "codex"
-        if _is_exec_file(cand):
-            return str(cand.resolve())
-    hit = shutil.which("codex")
-    if hit:
-        return hit
+        return str(p.resolve()) if _is_exec_file(p) else None
     home = Path.home()
-    candidates = [
-        Path("/opt/homebrew/bin/codex"),
-        Path("/usr/local/bin/codex"),
-        home / ".local/bin/codex",
-        Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"),
-        home / "Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+    # 1. 优先直接调用桌面 App（ChatGPT / Codex）内置本体，无需用户安装任何外部 CLI
+    desktop_candidates = [
         Path("/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex"),
         Path("/Applications/Codex.app/Contents/Resources/codex"),
         home / "Applications/Codex.app/Contents/Resources/codex-cli/bin/codex",
         home / "Applications/Codex.app/Contents/Resources/codex",
+        Path("/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"),
+        home / "Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
     ]
-    for cand in candidates:
+    for cand in desktop_candidates:
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    # 2. 兜底查找受管目录或系统 PATH
+    for bdir in _managed_bin_dirs():
+        cand = bdir / "codex"
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    for name in ([val] if val else []) + ["codex"]:
+        hit = shutil.which(name)
+        if hit:
+            return hit
+    for cand in (Path("/opt/homebrew/bin/codex"), Path("/usr/local/bin/codex"), home / ".local/bin/codex"):
         if _is_exec_file(cand):
             return str(cand.resolve())
     return None
 
 
 def resolve_claude_binary(raw: str = "") -> str | None:
-    """定位本机 Claude 引擎：优先显式路径/CLI，其次自动探测 Claude 桌面版内置引擎。"""
+    """定位本机 Claude 桌面版内置引擎（优先官方 Claude.app 内置本体，系统可执行文件仅作兜底）。"""
     val = (raw or "").strip()
-    if val:
+    if val and ("/" in val or "\\" in val):
         p = Path(val).expanduser()
-        if _is_exec_file(p):
-            return str(p.resolve())
-        hit = shutil.which(val)
-        if hit:
-            return hit
-        if "/" in val or "\\" in val:
-            return None
-    for bdir in _managed_bin_dirs():
-        cand = bdir / "claude"
-        if _is_exec_file(cand):
-            return str(cand.resolve())
-    hit = shutil.which("claude")
-    if hit:
-        return hit
+        return str(p.resolve()) if _is_exec_file(p) else None
     home = Path.home()
-    for cand in (
-        home / ".local/bin/claude",
-        Path("/opt/homebrew/bin/claude"),
-        Path("/usr/local/bin/claude"),
-    ):
-        if _is_exec_file(cand):
-            return str(cand.resolve())
-    # 自动探测 macOS Claude 桌面版内置的 claude-code 引擎（按版本号降序选最新）
+    # 1. 优先直接探测官方 Claude 桌面版内置引擎（按版本号降序选最新，零外部 CLI 依赖）
     app_support = home / "Library/Application Support/Claude"
     cc_root = app_support / "claude-code"
     if cc_root.is_dir():
@@ -183,11 +159,51 @@ def resolve_claude_binary(raw: str = "") -> str | None:
             cand = vdir / "claude"
             if _is_exec_file(cand):
                 return str(cand.resolve())
+    # 2. 兜底查找受管目录或系统 PATH
+    for bdir in _managed_bin_dirs():
+        cand = bdir / "claude"
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    for name in ([val] if val else []) + ["claude"]:
+        hit = shutil.which(name)
+        if hit:
+            return hit
+    for cand in (home / ".local/bin/claude", Path("/opt/homebrew/bin/claude"), Path("/usr/local/bin/claude")):
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    return None
+
+
+def resolve_antigravity_command(raw: str = "") -> list[str] | None:
+    """定位本机 Antigravity 桌面版调用命令（支持桌面 App 内置 language_server 及包装脚本）。"""
+    val = (raw or "").strip()
+    if val:
+        p = Path(val).expanduser()
+        if _is_exec_file(p):
+            resolved = str(p.resolve())
+            return [resolved, "agentapi"] if p.name == "language_server" else [resolved]
+    home = Path.home()
+    # 优先使用 Antigravity 桌面版内置本体或官方包装脚本
+    for app_ls in (
+        Path("/Applications/Antigravity.app/Contents/Resources/bin/language_server"),
+        home / "Applications/Antigravity.app/Contents/Resources/bin/language_server",
+    ):
+        if _is_exec_file(app_ls):
+            return [str(app_ls.resolve()), "agentapi"]
+    wrapper = home / ".gemini/antigravity/bin/agentapi"
+    if _is_exec_file(wrapper):
+        return [str(wrapper.resolve())]
+    env_val = os.environ.get("ANTIGRAVITY_AGENTAPI_EXE", "").strip()
+    if env_val:
+        ep = Path(env_val).expanduser()
+        if _is_exec_file(ep):
+            resolved = str(ep.resolve())
+            return [resolved, "agentapi"] if ep.name == "language_server" else [resolved]
     return None
 
 
 def check_claude_auth_status(raw: str = "") -> tuple[str | None, bool | None, str]:
-    """检测本机 Claude 桌面版 / CLI 引擎是否存在及其官方登录态。
+    """检测本机 Claude 桌面版引擎是否存在及其官方登录态。
 
     返回 (exe_path, logged_in, detail)：
       - logged_in 为 True 表示已完成官方登录，可直接后台 Push 自动弹对话；
@@ -196,7 +212,7 @@ def check_claude_auth_status(raw: str = "") -> tuple[str | None, bool | None, st
     """
     exe = resolve_claude_binary(raw)
     if not exe:
-        return None, None, "未检测到 Claude 桌面版或 Claude Code"
+        return None, None, "未检测到官方 Claude 桌面版"
     try:
         proc = subprocess.run(
             [exe, "auth", "status"],
@@ -212,10 +228,10 @@ def check_claude_auth_status(raw: str = "") -> tuple[str | None, bool | None, st
             if isinstance(st, dict) and isinstance(st.get("loggedIn"), bool):
                 if st["loggedIn"]:
                     return exe, True, "已登录官方账号"
-                return exe, False, "尚未完成后台登录授权（运行 vmr auth-claude 完成 1 次浏览器授权即可自动弹窗）"
+                return exe, False, "尚未完成 1 次官方授权（点击控制台「一键登录官方 Claude 账号」或运行 vmr auth-claude）"
     except Exception:
         pass
-    return exe, None, "已检测到引擎"
+    return exe, None, "已检测到桌面版引擎"
 
 
 def _find_agentapi(raw: str) -> Path:

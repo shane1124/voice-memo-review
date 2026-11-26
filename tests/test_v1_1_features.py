@@ -80,7 +80,7 @@ printf '# Codex 自动复盘\\n\\n模型：%s\\n收到字数：%s\\n' "${MODEL:-
 
             ok_conn, conn_msg = test_analyzer_connection(cfg, secrets)
             self.assertTrue(ok_conn)
-            self.assertIn("Codex CLI", conn_msg)
+            self.assertIn("Codex 桌面版", conn_msg)
 
             analyzer = get_analyzer(cfg, secrets, store, rules)
             self.assertIsInstance(analyzer, CodexCliAnalyzer)
@@ -133,7 +133,7 @@ printf '# Claude 自动复盘\\n\\n字数：%s\\n' "${#STDIN_CONTENT}"
 
             ok_conn, conn_msg = test_analyzer_connection(cfg, secrets)
             self.assertTrue(ok_conn)
-            self.assertIn("Claude Code CLI", conn_msg)
+            self.assertIn("Claude 桌面版", conn_msg)
 
             analyzer = get_analyzer(cfg, secrets, store, rules)
             self.assertIsInstance(analyzer, ClaudeCliAnalyzer)

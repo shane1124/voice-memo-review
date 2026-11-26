@@ -1215,7 +1215,7 @@ class VmrDaemon:
 
                     exe, logged_in, _ = check_claude_auth_status(daemon.cfg.claude_bin)
                     if not exe:
-                        self._send_json(400, {"ok": False, "message": "未检测到 Claude 桌面版或 Claude Code，请先安装 Claude 桌面版"})
+                        self._send_json(400, {"ok": False, "message": "未检测到官方 Claude 桌面版，请先安装 Claude 桌面版"})
                         return
                     if logged_in is True:
                         self._send_json(200, {"ok": True, "already_logged_in": True, "message": "官方 Claude 账号已登录，可直接自动弹出桌面对话"})

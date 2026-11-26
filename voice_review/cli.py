@@ -18,6 +18,7 @@ from voice_review.config import (
     VoiceReviewConfig,
     check_claude_auth_status,
     load_config,
+    resolve_antigravity_command,
     resolve_claude_binary,
     resolve_codex_binary,
     validate_provider_combo,
@@ -98,30 +99,31 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
     autostart_st = AutostartManager.default(cfg.vmr_home).status()
     vm_ok, vm_detail = _probe_voice_memos_access(cfg.recordings_dir)
     local_asrs = _detect_local_asr_tools()
+    agy_cmd = resolve_antigravity_command(str(cfg.agentapi_bin))
     codex_exe = resolve_codex_binary(cfg.codex_bin)
     claude_exe, claude_logged_in, claude_auth_detail = check_claude_auth_status(cfg.claude_bin)
     if not claude_exe:
-        claude_label = "Claude 桌面版 / CLI（免 Key 分析）"
+        claude_label = "Claude 桌面版（免 Key 自动弹对话）"
         claude_ok = False
-        claude_detail = cfg.claude_bin
+        claude_detail = "未检测到官方 Claude 桌面版"
     elif claude_logged_in is False:
-        claude_label = "Claude 桌面版 / CLI（尚未授权登录）"
+        claude_label = "Claude 桌面版（尚未授权登录）"
         claude_ok = False
         claude_detail = f"{claude_exe}（{claude_auth_detail}）"
     elif claude_logged_in is True:
-        claude_label = "Claude 桌面版 / CLI（已登录可自动弹窗）"
+        claude_label = "Claude 桌面版（已登录可自动弹窗）"
         claude_ok = True
         claude_detail = claude_exe
     else:
-        claude_label = "Claude 桌面版 / CLI（免 Key 分析）"
+        claude_label = "Claude 桌面版（免 Key 自动弹对话）"
         claude_ok = True
         claude_detail = claude_exe
     checks = [
         ("ffmpeg", shutil.which(cfg.ffmpeg_bin) is not None or Path(cfg.ffmpeg_bin).is_file(), cfg.ffmpeg_bin),
         ("ffprobe", shutil.which(cfg.ffprobe_bin) is not None or Path(cfg.ffprobe_bin).is_file(), cfg.ffprobe_bin),
         ("FluidAudio (fluidaudiocli)", cfg.fluidaudio_bin is not None, str(cfg.fluidaudio_bin or "未找到（可设 preprocessor=none）")),
-        ("Antigravity agentapi", cfg.agentapi_bin.is_file(), str(cfg.agentapi_bin)),
-        ("Codex 桌面版 / CLI（免 Key 分析）", codex_exe is not None, codex_exe or cfg.codex_bin),
+        ("Antigravity 桌面版", agy_cmd is not None, agy_cmd[0] if agy_cmd else "未检测到 Antigravity 桌面版"),
+        ("Codex 桌面版（免 Key 自动弹对话）", codex_exe is not None, codex_exe or "未检测到 Codex 桌面版"),
         (claude_label, claude_ok, claude_detail),
         ("苹果语音备忘录读取权限", vm_ok, vm_detail),
         ("开机后台自启（launchd）", autostart_st.enabled, ("已开启" + (" · 运行托管中" if autostart_st.loaded else " · 下次开机生效")) if autostart_st.enabled else "未开启（可用 vmr autostart on 开启）"),

@@ -29,6 +29,7 @@ from voice_review.agent_bridge import (
 from voice_review.config import (
     VoiceReviewConfig,
     check_claude_auth_status,
+    resolve_antigravity_command,
     resolve_claude_binary,
     resolve_codex_binary,
 )
@@ -566,7 +567,7 @@ class CodexCliAnalyzer(AnalyzerProvider):
         exe = resolve_codex_binary(self.cfg.codex_bin)
         if not exe:
             raise RuntimeError(
-                f"未检测到本机 Codex 桌面版或 Codex CLI（{self.cfg.codex_bin}），请先安装并登录 Codex，或切换其他分析引擎。"
+                f"未检测到本机 Codex 桌面版（{self.cfg.codex_bin}），请先安装并登录 Codex 桌面版，或切换其他分析引擎。"
             )
         work_cwd.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(prefix="vmr-codex-", suffix=".md", delete=False) as tf:
@@ -733,7 +734,7 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
         exe = resolve_claude_binary(self.cfg.claude_bin)
         if not exe:
             raise RuntimeError(
-                f"未检测到本机 Claude 桌面版或 Claude Code CLI（{self.cfg.claude_bin}），请先安装并登录 Claude，或切换其他分析引擎。"
+                f"未检测到本机 Claude 桌面版（{self.cfg.claude_bin}），请先安装并登录官方 Claude 桌面版，或切换其他分析引擎。"
             )
         work_cwd.mkdir(parents=True, exist_ok=True)
         cmd = [exe, "-p", "--output-format", "json", "--tools", ""]
@@ -918,26 +919,30 @@ def test_analyzer_connection(cfg: VoiceReviewConfig, secrets: SecretStore) -> tu
     if pid in ("none", "mcp-host"):
         return True, "当前为手动/MCP 接手分析模式（后台仅自动完成转写）"
     if pid == "antigravity-agentapi":
-        ok = cfg.agentapi_bin.is_file()
-        return (True, f"本机 Antigravity 可用：{cfg.agentapi_bin}") if ok else (False, f"未检测到 agentapi：{cfg.agentapi_bin}")
+        cmd = resolve_antigravity_command(str(cfg.agentapi_bin))
+        return (
+            (True, f"本机 Antigravity 桌面版可用（免 Key）：{cmd[0]}")
+            if cmd
+            else (False, f"未检测到本机 Antigravity 桌面版：{cfg.agentapi_bin}")
+        )
     if pid == "codex-cli":
         exe = resolve_codex_binary(cfg.codex_bin)
         return (
-            (True, f"本机 Codex 桌面版 / Codex CLI 可用（免 Key）：{exe}")
+            (True, f"本机 Codex 桌面版可用（免 Key）：{exe}")
             if exe
-            else (False, f"未检测到 Codex 桌面版或 Codex CLI：{cfg.codex_bin}")
+            else (False, f"未检测到本机 Codex 桌面版：{cfg.codex_bin}")
         )
     if pid == "claude-cli":
         exe, logged_in, _ = check_claude_auth_status(cfg.claude_bin)
         if not exe:
-            return False, f"未检测到 Claude 桌面版或 Claude Code CLI：{cfg.claude_bin}"
+            return False, f"未检测到本机官方 Claude 桌面版：{cfg.claude_bin}"
         if logged_in is False:
             return (
                 False,
-                f"已检测到 Claude 桌面版 / Claude Code CLI（{exe}），但尚未登录官方账号，请点下方「一键登录官方 Claude 账号」或运行 `vmr auth-claude` 完成 1 次浏览器授权",
+                f"已检测到官方 Claude 桌面版（{exe}），但尚未登录官方账号，请点下方「一键登录官方 Claude 账号」或运行 `vmr auth-claude` 完成 1 次浏览器授权",
             )
         suffix = "（官方账号已登录）" if logged_in is True else ""
-        return True, f"本机 Claude 桌面版 / Claude Code CLI 可用（免 Key）{suffix}：{exe}"
+        return True, f"本机 Claude 桌面版可用（免 Key）{suffix}：{exe}"
     if pid == "openai-compatible-llm":
         base = str(cfg.analyzer_settings.get("base_url") or "https://api.openai.com/v1").rstrip("/")
         key = secrets.get("openai_llm_api_key", env_var="OPENAI_API_KEY")

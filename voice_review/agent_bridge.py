@@ -10,7 +10,7 @@ import time
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from voice_review.config import VoiceReviewConfig
+from voice_review.config import VoiceReviewConfig, resolve_antigravity_command
 from voice_review.state import StateStore
 
 if TYPE_CHECKING:
@@ -158,8 +158,9 @@ class AgentBridge:
         self.store = store
 
     def _run(self, args: list[str], *, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+        prefix = resolve_antigravity_command(str(self.cfg.agentapi_bin)) or [str(self.cfg.agentapi_bin)]
         return subprocess.run(
-            [str(self.cfg.agentapi_bin), *args],
+            [*prefix, *args],
             capture_output=True,
             text=True,
             timeout=timeout,

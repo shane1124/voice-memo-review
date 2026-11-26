@@ -209,7 +209,7 @@ class ClientInstaller:
         codex_inst = codex_cfg.is_file() and "[mcp_servers.voice-memo-review]" in codex_cfg.read_text(encoding="utf-8", errors="ignore")
         out["codex"] = ClientStatus(
             client="codex",
-            display_name="Codex 桌面版 / CLI",
+            display_name="Codex 桌面版",
             detected=p["codex"]["root"].is_dir() or codex_cfg.is_file(),
             installed=codex_inst,
             config_path=str(codex_cfg),
