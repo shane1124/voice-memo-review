@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import tomllib
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -185,6 +186,38 @@ def resolve_claude_binary(raw: str = "") -> str | None:
     return None
 
 
+def check_claude_auth_status(raw: str = "") -> tuple[str | None, bool | None, str]:
+    """检测本机 Claude 桌面版 / CLI 引擎是否存在及其官方登录态。
+
+    返回 (exe_path, logged_in, detail)：
+      - logged_in 为 True 表示已完成官方登录，可直接后台 Push 自动弹对话；
+      - logged_in 为 False 表示已安装但尚未完成 1 次浏览器授权；
+      - logged_in 为 None 表示未安装或当前二进制不支持 JSON 状态探测。
+    """
+    exe = resolve_claude_binary(raw)
+    if not exe:
+        return None, None, "未检测到 Claude 桌面版或 Claude Code"
+    try:
+        proc = subprocess.run(
+            [exe, "auth", "status"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=2.5,
+            check=False,
+        )
+        raw_out = (proc.stdout or "").strip()
+        if raw_out.startswith("{"):
+            st = json.loads(raw_out)
+            if isinstance(st, dict) and isinstance(st.get("loggedIn"), bool):
+                if st["loggedIn"]:
+                    return exe, True, "已登录官方账号"
+                return exe, False, "尚未完成后台登录授权（运行 vmr auth-claude 完成 1 次浏览器授权即可自动弹窗）"
+    except Exception:
+        pass
+    return exe, None, "已检测到引擎"
+
+
 def _find_agentapi(raw: str) -> Path:
     val = (raw or "").strip()
     if val:
@@ -338,6 +371,8 @@ def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None
         max_concurrency=max(1, int(v2_raw.get("max_concurrency", 25))),
         agent_timeout_sec=max(30, int(v2_raw.get("agent_timeout_sec", 120))),
         stagger_sec=max(0.0, float(v2_raw.get("stagger_sec", 0.25))),
+        max_turns_per_worker=max(1, int(v2_raw.get("max_turns_per_worker", 6))),
+        worker_pool_size=max(0, int(v2_raw.get("worker_pool_size", 0))),
     )
 
     output_dir = _resolve_path(str(raw.get("output_dir", "output")), root)
@@ -461,6 +496,8 @@ def config_to_dict(cfg: VoiceReviewConfig) -> dict[str, Any]:
             "max_concurrency": cfg.segmenter.max_concurrency,
             "agent_timeout_sec": cfg.segmenter.agent_timeout_sec,
             "stagger_sec": cfg.segmenter.stagger_sec,
+            "max_turns_per_worker": cfg.segmenter.max_turns_per_worker,
+            "worker_pool_size": cfg.segmenter.worker_pool_size,
         },
         "update": {
             "repo": cfg.update_repo,

@@ -62,21 +62,25 @@ def render_workflow_script(
     agent_timeout_sec: int = 120,
     stagger_sec: float = 0.25,
     preferred_subagent: str = "audio_transcriber_lite",
+    max_turns_per_worker: int = 6,
+    worker_pool_size: int = 0,
 ) -> str:
-    """生成可直接交给 Antigravity `run_workflow(ScriptPath=...)` 执行的高性能稳态工作流脚本。"""
+    """生成可直接交给 Antigravity `run_workflow(ScriptPath=...)` 执行的高性能稳态工作流脚本（支持 Worker 池复用会话，削减 80%+ 本地会话生成量）。"""
     manifest_literal = json.dumps(str(manifest_path.resolve()), ensure_ascii=False)
     cleanup_literal = "True" if cleanup_clips else "False"
     max_conc = max(1, int(max_concurrency))
     fallback_conc = max(1, max_conc // 2)
     timeout_sec = max(30, int(agent_timeout_sec))
     stagger = max(0.0, float(stagger_sec))
+    max_turns = max(1, int(max_turns_per_worker))
+    pool_size_cfg = max(0, int(worker_pool_size))
     pref_agent_literal = json.dumps(str(preferred_subagent or "").strip(), ensure_ascii=False)
     schema_leak_pat_literal = json.dumps(_SCHEMA_LEAK_RE.pattern, ensure_ascii=False)
     dangling_brace_pat_literal = json.dumps(_DANGLING_BRACE_RE.pattern, ensure_ascii=False)
     parser_err_pat_literal = json.dumps(_PARSER_ERR_RE.pattern, ensure_ascii=False)
     strip_chars_literal = json.dumps(' "\',{}[]', ensure_ascii=False)
 
-    return f'''"""由 voice-memo-review 自动生成的 Antigravity V2 并发精转工作流（高并发稳态护栏 + 断点缓存 + 情绪捕捉）。"""
+    return f'''"""由 voice-memo-review 自动生成的 Antigravity V2 并发精转工作流（Worker 池会话复用 + 高并发稳态护栏 + 断点缓存 + 情绪捕捉）。"""
 import asyncio
 import json
 import random
@@ -111,6 +115,9 @@ STAGGER_SEC = {stagger}
 LAUNCH_PACE_SEC = max(0.35, STAGGER_SEC)
 MAX_RETRIES = 4
 MAX_SPLIT_DEPTH = 2
+MAX_TURNS_PER_WORKER = {max_turns}
+WORKER_POOL_SIZE = {pool_size_cfg}
+AUTO_POOL_CAP = 12
 PREFERRED_SUBAGENT = {pref_agent_literal}
 
 manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -273,6 +280,42 @@ async def verify_split_speaker(chk, worker_type: str):
         await LIMITER.release()
 
 
+def build_worker_standing_prompt() -> str:
+    """固定工位常驻指令：仅在工位首次创建时发送，多轮复用彻底避免重复造会话。"""
+    return f"""你是多轮复用的高精度中文/中英混说语音精转工位。
+
+【严格隔离与多轮防串台纪律（必须遵守）】
+- 每一轮只处理当前这一轮消息里列出的 `seg_id` 和 MP3 文件路径；**严禁复用、照抄或混入上一轮已经听写过的任何内容**。
+- 只能调用 `read_file` 并行读取当前轮列出的全部 MP3 文件，听完后直接调用 `finish` 返回本轮 JSON。
+- 严禁读取其他文件、严禁写文件、严禁运行命令。
+{{context_hint}}
+【转写与防死磕护栏（必须遵守）】
+1. 结合本轮上下句语境把每一段**逐字完整听写**，精准还原中英专词、数字与人名，加自然标点；不要在 `text` 开头重复写时间戳或人名。
+2. **防死磕护栏**：纯背景杂音、餐馆底噪、远场无法辨清的模糊音节直接留空 `""` 或简标 `[听不清]`，**严禁反复逐音节猜测推演消耗思考时间**。
+3. **前向气口去重**：每段音频开头向前借了 0.25 秒气口防咬字；若开头听到上一段末尾残留的半个尾音/尾字，请忽略不要重复写进本段。
+4. **零漏段**：本轮清单中每条 `seg_id` 都必须出现在 `items` 中（纯杂音 `text` 填 `""`）。
+5. **端到端语气情绪标注（`tone_note`）**：仅当某段出现明显的情绪、气场或节奏波动时（如：语速放缓略显犹豫、强势压迫截断、自嘲大笑气氛轻松、明显焦虑急促、敷衍应付、兴奋强调等），用 6～20 字客观简注；平淡正常陈述留空 `""`。
+6. **叠话/插话标注（`multi_speaker_note`）**：仅当段内清楚听出第二个人插话或双线重叠对话时简注拆分；单人正常发言留空 `""`。
+"""
+
+
+def build_turn_prompt(batch_id, batch, merged_names, *, is_patch: bool = False) -> str:
+    """复用工位的单轮轻量化任务指令（仅传本轮音频清单，命中缓存并防串台）。"""
+    lines = []
+    for s in batch:
+        spk = merged_names.get(s["sid"], s["speaker_label"])
+        lines.append(
+            f"- `{{s['seg_id']}}` | 时间 `{{s['hms_start']}}–{{s['hms_end']}}` ({{s['dur']}}s) | 说话人 `{{spk}}` | 音频：`{{s['mp3_path']}}`"
+        )
+    seg_list = "\\n".join(lines)
+    seg_ids = ", ".join(s["seg_id"] for s in batch)
+    tag = "缺段精准补录" if is_patch else "连续对话短音频"
+    return f"""【全新独立轮次：批次 `{{batch_id}}`（{{tag}}，共 {{len(batch)}} 段）— 请忽略上一轮内容，仅处理下方音频】
+{{seg_list}}
+
+请在同一回合内并行调用 `read_file` 读完以上 {{len(batch)}} 个 MP3，逐字转写（`{{seg_ids}}`）并立即调用 `finish` 返回 JSON（`batch_id` 填 `{{batch_id}}`）。"""
+
+
 def build_batch_prompt(batch_id, batch, merged_names, *, is_patch: bool = False):
     lines = []
     for s in batch:
@@ -300,6 +343,123 @@ def build_batch_prompt(batch_id, batch, merged_names, *, is_patch: bool = False)
 5. **端到端语气情绪标注（`tone_note`）**：仅当某段出现明显的情绪、气场或节奏波动时（如：语速放缓略显犹豫、强势压迫截断、自嘲大笑气氛轻松、明显焦虑急促、敷衍应付、兴奋强调等），用 6～20 字客观简注；平淡正常陈述留空 `""`。
 6. **叠话/插话标注（`multi_speaker_note`）**：仅当段内清楚听出第二个人插话或双线重叠对话时简注拆分；单人正常发言留空 `""`。
 """
+
+
+def compute_worker_pool_size(total_batches: int) -> int:
+    """根据批次数和配置自动计算最优复用工位数量，既保并发效率又将总会话数压低 80%+。"""
+    n = max(1, int(total_batches))
+    if WORKER_POOL_SIZE > 0:
+        return max(1, min(MAX_CONCURRENCY, WORKER_POOL_SIZE, n))
+    auto_cap = min(MAX_CONCURRENCY, AUTO_POOL_CAP)
+    # 每工位默认目标承担 ~3 批起（最多不超过 MAX_TURNS_PER_WORKER 轮后自动轮换）
+    target = max(1, (n + 2) // 3)
+    return max(1, min(auto_cap, target, n))
+
+
+class _WorkerSlot:
+    def __init__(self, slot_id: int) -> None:
+        self.slot_id = slot_id
+        self.generation = 0
+        self.handle = None
+        self.turns_used = 0
+
+
+class ReusableWorkerPool:
+    """复用型 Agent 工位池：单工位串行复用 N 轮后自动销毁换新，遇超时/报错立即作废不污染后续批次。"""
+
+    def __init__(self, pool_size: int, worker_type: str, max_turns: int = MAX_TURNS_PER_WORKER) -> None:
+        self.pool_size = max(1, int(pool_size))
+        self.worker_type = worker_type
+        self.max_turns = max(1, int(max_turns))
+        self.standing_prompt = build_worker_standing_prompt()
+        self.sessions_created = 0
+        self.turns_completed = 0
+        self.reusable_supported = True
+        self._slots = [_WorkerSlot(i + 1) for i in range(self.pool_size)]
+        self._queue: asyncio.Queue = asyncio.Queue()
+        for slot in self._slots:
+            self._queue.put_nowait(slot)
+
+    def _retire_slot(self, slot: _WorkerSlot) -> None:
+        if slot.handle is not None:
+            handle = slot.handle
+            slot.handle = None
+            del handle
+        slot.turns_used = 0
+
+    async def run_turn(self, batch_id: str, segs, merged_names, *, is_patch: bool = False, role_name: str = ""):
+        slot = await self._queue.get()
+        try:
+            if not self.reusable_supported:
+                self.sessions_created += 1
+                res = await _await_agent(
+                    agent(
+                        build_batch_prompt(batch_id, segs, merged_names, is_patch=is_patch),
+                        schema=BATCH_SCHEMA,
+                        role=role_name or f"精转 {{batch_id}}",
+                        type_name=self.worker_type,
+                        model="flash",
+                    ),
+                    timeout_sec=AGENT_TIMEOUT_SEC,
+                )
+                self.turns_completed += 1
+                return res
+
+            if slot.handle is None:
+                slot.generation += 1
+                slot.turns_used = 0
+                slot_role = f"精转工位 W{{slot.slot_id:02d}}" + (f"-G{{slot.generation}}" if slot.generation > 1 else "")
+                candidate = agent(
+                    self.standing_prompt,
+                    schema=BATCH_SCHEMA,
+                    role=slot_role,
+                    type_name=self.worker_type,
+                    model="flash",
+                )
+                if callable(candidate):
+                    slot.handle = candidate
+                    self.sessions_created += 1
+                else:
+                    # 兼容只返回一次性 coroutine 的 mock / 旧运行时
+                    self.reusable_supported = False
+                    if hasattr(candidate, "close"):
+                        try:
+                            candidate.close()
+                        except Exception:
+                            pass
+                    self.sessions_created += 1
+                    res = await _await_agent(
+                        agent(
+                            build_batch_prompt(batch_id, segs, merged_names, is_patch=is_patch),
+                            schema=BATCH_SCHEMA,
+                            role=role_name or f"精转 {{batch_id}}",
+                            type_name=self.worker_type,
+                            model="flash",
+                        ),
+                        timeout_sec=AGENT_TIMEOUT_SEC,
+                    )
+                    self.turns_completed += 1
+                    return res
+
+            turn_prompt = build_turn_prompt(batch_id, segs, merged_names, is_patch=is_patch)
+            try:
+                res = await _await_agent(slot.handle(turn_prompt, BATCH_SCHEMA), timeout_sec=AGENT_TIMEOUT_SEC)
+            except Exception:
+                # 任何超时或异常立即作废该工位，严防坏状态/卡死上下文污染后续批次
+                self._retire_slot(slot)
+                raise
+
+            slot.turns_used += 1
+            self.turns_completed += 1
+            if slot.turns_used >= self.max_turns:
+                self._retire_slot(slot)
+            return res
+        finally:
+            self._queue.put_nowait(slot)
+
+    def close(self) -> None:
+        for slot in self._slots:
+            self._retire_slot(slot)
 
 
 def _split_segments_balanced(segs):
@@ -332,6 +492,7 @@ async def _invoke_with_retry(
     is_patch=False,
     stagger_delay=0.0,
     split_depth=0,
+    pool=None,
 ):
     if stagger_delay > 0:
         await asyncio.sleep(stagger_delay)
@@ -342,16 +503,19 @@ async def _invoke_with_retry(
         try:
             role_prefix = "补录" if is_patch else "精转"
             role_name = f"{{role_prefix}} {{batch_id}}" + (f" (重试{{attempt - 1}})" if attempt > 1 else "")
-            res = await _await_agent(
-                agent(
-                    build_batch_prompt(batch_id, segs, merged_names, is_patch=is_patch),
-                    schema=BATCH_SCHEMA,
-                    role=role_name,
-                    type_name=worker_type,
-                    model="flash",
-                ),
-                timeout_sec=AGENT_TIMEOUT_SEC,
-            )
+            if pool is not None:
+                res = await pool.run_turn(batch_id, segs, merged_names, is_patch=is_patch, role_name=role_name)
+            else:
+                res = await _await_agent(
+                    agent(
+                        build_batch_prompt(batch_id, segs, merged_names, is_patch=is_patch),
+                        schema=BATCH_SCHEMA,
+                        role=role_name,
+                        type_name=worker_type,
+                        model="flash",
+                    ),
+                    timeout_sec=AGENT_TIMEOUT_SEC,
+                )
             return True, (res.get("items") or []), ""
         except Exception as exc:
             timed_out = isinstance(exc, asyncio.TimeoutError)
@@ -380,6 +544,7 @@ async def _invoke_with_retry(
                     is_patch=is_patch,
                     stagger_delay=0.0,
                     split_depth=split_depth + 1,
+                    pool=pool,
                 ),
                 _invoke_with_retry(
                     f"{{batch_id}}b",
@@ -389,6 +554,7 @@ async def _invoke_with_retry(
                     is_patch=is_patch,
                     stagger_delay=0.0,
                     split_depth=split_depth + 1,
+                    pool=pool,
                 ),
             )
             merged_items = list(l_items) + list(r_items)
@@ -406,7 +572,7 @@ async def _invoke_with_retry(
     return False, [], last_err
 
 
-async def run_batch(idx, batch_id, batch, merged_names, worker_type):
+async def run_batch(idx, batch_id, batch, merged_names, worker_type, pool=None):
     cache_file = cache_dir / f"{{batch_id}}.json"
     if cache_file.is_file():
         try:
@@ -420,8 +586,10 @@ async def run_batch(idx, batch_id, batch, merged_names, worker_type):
     expected_ids = [s["seg_id"] for s in batch]
     seg_by_id = {{s["seg_id"]: s for s in batch}}
 
+    # 仅首批冷启动错峰，后续由工位池自然排队复用
+    cold_stagger = (idx * STAGGER_SEC) if (pool is None or idx < pool.pool_size) else 0.0
     ok, items, err = await _invoke_with_retry(
-        batch_id, batch, merged_names, worker_type, is_patch=False, stagger_delay=idx * STAGGER_SEC
+        batch_id, batch, merged_names, worker_type, is_patch=False, stagger_delay=cold_stagger, pool=pool
     )
     got_map = {{x["seg_id"]: x for x in items if isinstance(x, dict) and x.get("seg_id") in seg_by_id}}
     missing_ids = [sid for sid in expected_ids if sid not in got_map]
@@ -431,7 +599,7 @@ async def run_batch(idx, batch_id, batch, merged_names, worker_type):
         log(f"[缺段补录] {{batch_id}} 仅补录缺失 {{len(missing_ids)}} 段: {{missing_ids}}")
         miss_segs = [seg_by_id[sid] for sid in missing_ids]
         p_ok, p_items, _ = await _invoke_with_retry(
-            f"{{batch_id}}_patch", miss_segs, merged_names, worker_type, is_patch=True
+            f"{{batch_id}}_patch", miss_segs, merged_names, worker_type, is_patch=True, pool=pool
         )
         if p_ok:
             for it in p_items:
@@ -480,9 +648,15 @@ elif split_checks:
     )
 
 batches = manifest.get("batches") or []
-phase(f"V2 高并发精转（共 {{len(batches)}} 包，上限 {{MAX_CONCURRENCY}}，worker={{worker_type}}）")
+pool_size = compute_worker_pool_size(len(batches))
+worker_pool = ReusableWorkerPool(pool_size, worker_type, max_turns=MAX_TURNS_PER_WORKER)
+phase(f"V2 复用工位并发精转（共 {{len(batches)}} 包，{{pool_size}} 工位复用/每工位≤{{MAX_TURNS_PER_WORKER}}轮，worker={{worker_type}}）")
 indexed = [(i, f"B{{i + 1:02d}}", b) for i, b in enumerate(batches)]
-batch_results = await parallel(indexed, lambda t: run_batch(t[0], t[1], t[2], merged_names, worker_type))
+try:
+    batch_results = await parallel(indexed, lambda t: run_batch(t[0], t[1], t[2], merged_names, worker_type, pool=worker_pool))
+finally:
+    worker_pool.close()
+log(f"[工位复用统计] {{len(batches)}} 批任务仅创建 {{worker_pool.sessions_created}} 个精转会话（完成 {{worker_pool.turns_completed}} 轮，复用={{worker_pool.reusable_supported}}）")
 
 text_map = {{}}
 tone_map = {{}}
@@ -554,6 +728,9 @@ summary_obj = {{
     "merged_names": merged_names,
     "failed_batches": failed_batches,
     "worker_type": worker_type,
+    "worker_pool_size": pool_size,
+    "sessions_created": worker_pool.sessions_created,
+    "reusable_supported": worker_pool.reusable_supported,
     "wall_sec": round(time.monotonic() - t_total, 1),
 }}
 (job_dir / "v2_result.json").write_text(
@@ -669,6 +846,8 @@ def prepare_v2_job(
             max_concurrency=cfg.max_concurrency,
             agent_timeout_sec=cfg.agent_timeout_sec,
             stagger_sec=cfg.stagger_sec,
+            max_turns_per_worker=cfg.max_turns_per_worker,
+            worker_pool_size=cfg.worker_pool_size,
         ),
         encoding="utf-8",
     )

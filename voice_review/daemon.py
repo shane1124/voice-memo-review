@@ -16,6 +16,7 @@ import secrets as py_secrets
 import select
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1207,6 +1208,36 @@ class VmrDaemon:
                     daemon.store.update(rec_id, status="discovered", last_error="", reset_retry=True)
                     daemon.wake_worker()
                     self._send_json(200, {"ok": True})
+                    return
+
+                if path == "/api/v1/providers/claude-login":
+                    from voice_review.config import check_claude_auth_status
+
+                    exe, logged_in, _ = check_claude_auth_status(daemon.cfg.claude_bin)
+                    if not exe:
+                        self._send_json(400, {"ok": False, "message": "未检测到 Claude 桌面版或 Claude Code，请先安装 Claude 桌面版"})
+                        return
+                    if logged_in is True:
+                        self._send_json(200, {"ok": True, "already_logged_in": True, "message": "官方 Claude 账号已登录，可直接自动弹出桌面对话"})
+                        return
+                    try:
+                        subprocess.Popen(
+                            [exe, "auth", "login", "--claudeai"],
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True,
+                        )
+                        self._send_json(
+                            200,
+                            {
+                                "ok": True,
+                                "already_logged_in": False,
+                                "message": "已在浏览器打开官方 Claude 授权页；点「允许」完成后，点击「测试连通」确认即可自动弹出桌面对话",
+                            },
+                        )
+                    except Exception as exc:
+                        self._send_json(500, {"ok": False, "message": f"启动官方 Claude 授权失败：{exc}"})
                     return
 
                 if path == "/api/v1/providers/test":

@@ -226,6 +226,78 @@ class TestVoiceReviewCore(unittest.TestCase):
         self.assertAlmostEqual(cfg.segmenter.batch_max_speech_sec, 120.0)
         self.assertAlmostEqual(cfg.segmenter.pad_before_sec, 0.25)
 
+    def test_workflow_worker_pool_reuses_sessions_and_rotates(self) -> None:
+        """验证 ReusableWorkerPool 会话复用、满轮自动换新与异常立即作废重建，防止冲爆 500 会话上限。"""
+        import asyncio
+        import re
+
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest_p = Path(tmp) / "manifest_v2.json"
+            segs = [
+                {"seg_id": f"S{i:03d}", "sid": "SPEAKER_00", "speaker_label": "Alice", "hms_start": "00:00:00", "hms_end": "00:00:05", "dur": 5.0, "mp3_path": f"/tmp/S{i:03d}.mp3"}
+                for i in range(1, 19)
+            ]
+            batches = [[s] for s in segs]
+            manifest_p.write_text(
+                json.dumps({"transcript_path": str(Path(tmp) / "out.md"), "clips_dir": tmp, "segments": segs, "batches": batches}),
+                encoding="utf-8",
+            )
+            script = render_workflow_script(
+                manifest_p,
+                cleanup_clips=False,
+                max_concurrency=10,
+                agent_timeout_sec=60,
+                stagger_sec=0.0,
+                max_turns_per_worker=6,
+                worker_pool_size=3,
+            )
+            defs_part = script.split("\nt_total = time.monotonic()")[0]
+            logs: list[str] = []
+            created_roles: list[str] = []
+            failed_once = {"done": False}
+
+            def fake_reusable_agent(prompt, schema=None, role="", type_name="self", model="flash"):
+                created_roles.append(role)
+
+                class _Handle:
+                    def __call__(self, turn_prompt, turn_schema=None):
+                        async def _run():
+                            ids = re.findall(r"`(S\d{3})`", turn_prompt)
+                            # 模拟 S005 首次超时，验证损坏工位立刻作废换新
+                            if ids == ["S005"] and not failed_once["done"]:
+                                failed_once["done"] = True
+                                raise asyncio.TimeoutError()
+                            return {"batch_id": role, "items": [{"seg_id": sid, "text": f"ok-{sid}"} for sid in ids]}
+                        return _run()
+
+                return _Handle()
+
+            ns: dict = {"log": logs.append, "agent": fake_reusable_agent}
+            exec(compile(defs_part, "wf_pool_defs.py", "exec"), ns)
+
+            # 1) 验证自动工位池规模计算（60 批仅开 12 工位）
+            self.assertEqual(ns["compute_worker_pool_size"](18), 3)
+
+            async def _run_all():
+                pool = ns["ReusableWorkerPool"](3, "self", max_turns=6)
+                # 测试 18 个 batch（外加 S005 一次超时重试）
+                tasks = [
+                    ns["_invoke_with_retry"](f"B{i + 1:02d}", b, {}, "self", stagger_delay=0.0, pool=pool)
+                    for i, b in enumerate(batches)
+                ]
+                results = await asyncio.gather(*tasks)
+                pool.close()
+                return pool, results
+
+            # 加快退避以便测试秒跑
+            ns["random"].uniform = lambda a, b: 0.01
+            pool, results = asyncio.run(_run_all())
+            self.assertTrue(all(r[0] for r in results))
+            # 18 批本来会创建 19 个独立会话；工位池（3 工位 * 6 轮 + 1 次超时换新）仅创建 4~6 个会话，远少于 18
+            self.assertLessEqual(pool.sessions_created, 6)
+            self.assertEqual(pool.turns_completed, 18)
+            self.assertTrue(pool.reusable_supported)
+
     def test_sanitize_transcript_field_strips_schema_leaks(self) -> None:
         self.assertEqual(
             sanitize_transcript_field('我觉得可以先试点一下"},{multi_speaker_note: ""'),

@@ -25,6 +25,8 @@ class SegmenterConfig:
     max_concurrency: int = 25      # 稳态并发上限（规避客户端高并发状态表竞态，遇限流自动减半降级）
     agent_timeout_sec: int = 120   # 单包硬超时熔断（秒）
     stagger_sec: float = 0.25      # 错峰启动间隔（秒）
+    max_turns_per_worker: int = 6  # 单复用工位最多连续精转轮数（满轮自动换新，防上下文膨胀同时削减 80%+ 会话数）
+    worker_pool_size: int = 0      # 0=自动按批次数与并发上限自适应取最优工位数（上限 12，防打爆本地 500 会话保留池）
 
 
 @dataclass

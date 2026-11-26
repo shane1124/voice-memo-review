@@ -143,6 +143,10 @@ class ClientInstaller:
                 "config": self.home / ".claude.json",
                 "skill": self.home / ".claude" / "skills" / PLUGIN_NAME,
             },
+            "claude_desktop": {
+                "root": self.home / "Library" / "Application Support" / "Claude",
+                "config": self.home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json",
+            },
             "codex": {
                 "root": self.home / ".codex",
                 "config": self.home / ".codex" / "config.toml",
@@ -184,12 +188,28 @@ class ClientInstaller:
             config_path=str(claude_cfg),
         )
 
+        # Claude Desktop（官方桌面版 Chat/Cowork MCP 配置）
+        cd_cfg = p["claude_desktop"]["config"]
+        cd_inst = False
+        if cd_cfg.is_file():
+            try:
+                cd_inst = PLUGIN_NAME in (json.loads(cd_cfg.read_text(encoding="utf-8")).get("mcpServers") or {})
+            except Exception:
+                cd_inst = False
+        out["claude_desktop"] = ClientStatus(
+            client="claude_desktop",
+            display_name="Claude 桌面版",
+            detected=p["claude_desktop"]["root"].is_dir() or cd_cfg.is_file(),
+            installed=cd_inst,
+            config_path=str(cd_cfg),
+        )
+
         # Codex
         codex_cfg = p["codex"]["config"]
         codex_inst = codex_cfg.is_file() and "[mcp_servers.voice-memo-review]" in codex_cfg.read_text(encoding="utf-8", errors="ignore")
         out["codex"] = ClientStatus(
             client="codex",
-            display_name="Codex CLI",
+            display_name="Codex 桌面版 / CLI",
             detected=p["codex"]["root"].is_dir() or codex_cfg.is_file(),
             installed=codex_inst,
             config_path=str(codex_cfg),
@@ -225,6 +245,8 @@ class ClientInstaller:
                 results[client] = self._install_antigravity()
             elif client == "claude":
                 results[client] = self._install_json_mcp("claude", self._paths()["claude"]["config"], self._paths()["claude"]["skill"])
+            elif client == "claude_desktop":
+                results[client] = self._install_json_mcp("claude_desktop", self._paths()["claude_desktop"]["config"], None)
             elif client == "cursor":
                 results[client] = self._install_json_mcp("cursor", self._paths()["cursor"]["config"], None)
             elif client == "codex":
@@ -232,7 +254,7 @@ class ClientInstaller:
         return results
 
     def uninstall(self, targets: list[str] | None = None) -> dict[str, InstallResult]:
-        all_clients = ("antigravity", "claude", "codex", "cursor")
+        all_clients = ("antigravity", "claude", "claude_desktop", "codex", "cursor")
         selected = [t.strip().lower() for t in targets if t.strip().lower() in all_clients] if targets else list(all_clients)
         results: dict[str, InstallResult] = {}
         for client in selected:
@@ -240,6 +262,8 @@ class ClientInstaller:
                 results[client] = self._uninstall_antigravity()
             elif client == "claude":
                 results[client] = self._uninstall_json_mcp("claude", self._paths()["claude"]["config"], self._paths()["claude"]["skill"])
+            elif client == "claude_desktop":
+                results[client] = self._uninstall_json_mcp("claude_desktop", self._paths()["claude_desktop"]["config"], None)
             elif client == "cursor":
                 results[client] = self._uninstall_json_mcp("cursor", self._paths()["cursor"]["config"], None)
             elif client == "codex":

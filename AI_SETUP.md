@@ -92,6 +92,7 @@
    - 若用户直接口述了偏好，调用 `vmr_update_profile` 与 `vmr_save_template` 立即落盘；若用户回「先用内置示例」，则保留默认通用示例。
 3. **收尾核验并给出 3 句开箱指令**：
    - 运行 `~/.local/bin/vmr doctor` 确认全绿；
+   - **官方 Claude 桌面版 1 次授权收口**：若用户选了 **Claude 桌面版（`claude-cli`）** 且 `vmr doctor` 显示「Claude 桌面版 / CLI（尚未授权登录）」，说明官方 Claude 桌面版不向后台进程自动共享登录态——直接向用户解释「只需在浏览器点 1 次官方 Claude 授权，之后新录音即可免 Key 事件秒推、自动弹出 Claude 桌面版对话」，并帮用户执行 `~/.local/bin/vmr auth-claude`（或引导在控制台「引擎插槽」点击 **「一键登录官方 Claude 账号」**），完成后再跑一次 `vmr doctor` 确认变绿！
    - **macOS 苹果语音备忘录完全磁盘访问权限一步到位指引**：若用户选了 ①「苹果语音备忘录」且 `vmr doctor` 报「苹果语音备忘录读取权限 ❌」，**直接把 `vmr doctor` 输出的 `Python 真实路径`（如 `/opt/homebrew/Cellar/python@3.13/.../bin/python3.13`，切勿误导用户只加 `Python.app`！）** 发给用户，引导他去「系统设置 → 隐私与安全性 → 完全磁盘访问权限 → 点＋按 ⌘⇧G 粘贴路径 → 开启开关」，完成后重启后台守护并再次 `vmr doctor` 核实变绿！
    - 提醒用户新开一条对话即可调用 13 个 MCP 工具，并给出 3 句顺手示例：
      - 「看看我今天最新那条录音，按我的专属模板整理重点」

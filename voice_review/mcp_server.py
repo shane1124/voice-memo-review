@@ -13,9 +13,9 @@ from voice_review import __version__
 from voice_review.autostart import AutostartManager, write_restart_token
 from voice_review.config import (
     VoiceReviewConfig,
+    check_claude_auth_status,
     config_to_dict,
     load_config,
-    resolve_claude_binary,
     resolve_codex_binary,
     save_config_dict,
     validate_provider_combo,
@@ -227,6 +227,7 @@ class McpStdioServer:
             auto_st = AutostartManager.default(self.cfg.vmr_home).status()
             from voice_review.updater import SelfUpdater
             cached_upd = SelfUpdater.default(self.cfg).read_cached_update()
+            claude_exe, claude_logged_in, _ = check_claude_auth_status(self.cfg.claude_bin)
             return {
                 "version": __version__,
                 "vmr_home": str(self.cfg.vmr_home),
@@ -243,7 +244,8 @@ class McpStdioServer:
                 "fluidaudio_ready": self.cfg.fluidaudio_bin is not None,
                 "agentapi_ready": self.cfg.agentapi_bin.is_file(),
                 "codex_ready": bool(resolve_codex_binary(self.cfg.codex_bin)),
-                "claude_ready": bool(resolve_claude_binary(self.cfg.claude_bin)),
+                "claude_ready": bool(claude_exe),
+                "claude_logged_in": claude_logged_in,
                 "update_available": bool(cached_upd and cached_upd.has_update),
                 "latest_version": cached_upd.latest_version if cached_upd else __version__,
                 "release_notes": cached_upd.release_notes if cached_upd else "",

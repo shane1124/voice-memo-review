@@ -265,6 +265,12 @@
                   <span>分析完成后自动在桌面端（Codex / Claude）弹出带完整分析稿的对话窗口</span>
                 </label>
               </div>
+              <div class="setting-row" data-an-field="claude_auth" hidden>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;width:100%;">
+                  <span style="font-size:12.5px;color:var(--muted);">官方 Claude 桌面版首次启用自动弹窗，需在浏览器点 1 次官方授权（只需 1 次，之后永久免 Key）</span>
+                  <button class="btn subtle" id="claudeLoginBtn" type="button">一键登录官方 Claude 账号</button>
+                </div>
+              </div>
               <div class="setting-row" data-an-field="api_key" hidden>
                 <label class="field">
                   <span>API Key（留空或保持掩码则保留原密钥）</span>

@@ -26,7 +26,8 @@
   - 一键 `vmr autostart on` 或控制台开关开启标准 `launchd` 后台常驻（开机自启、关终端不掉线、崩溃自动拉起）。
   - 守护进程每 24 小时带 `ETag` 静默检查一次 GitHub 新版本；有新版时在控制台顶部横幅与 AI 对话里温和提醒；点击「一键更新并重启」或运行 `vmr update` 自动避开正在转写的录音，校验 `SHA256SUMS` 原子替换并自动无感重启刷新页面。
 - **跨 AI 原生 MCP（13 个工具）+ 通用 Skill**：
-  - 一行 `vmr install` 自动无损接入 **Antigravity、Claude Code、Codex、Cursor**；首次接入后请**新开一条对话或重启客户端**刷新工具列表。
+  - 一行 `vmr install` 自动无损接入 **Antigravity、Claude 桌面版（`claude_desktop_config.json`）、Claude Code、Codex、Cursor**；首次接入后请**新开一条对话或重启客户端**刷新工具列表。
+  - 若选用官方 Claude 桌面版自动分析，运行一次 `vmr auth-claude`（或在控制台点击「一键登录官方 Claude 账号」）完成 1 次浏览器授权即可实现 0 延迟自动弹出对话。
 - **免 Xcode 编译**：Apple Silicon 离线分发包内置 10 MB `fluidaudiocli` 与 21 MB 离线声纹模型，解压 3 分钟开箱即用。
 
 ---
@@ -50,7 +51,8 @@ vmr autostart on                # 开启 macOS 开机后台自启（off 关闭 /
 vmr watch                       # 前台无头常驻监听语音备忘录与投放文件夹
 vmr run 录音.m4a --template meeting_minutes  # 单文件立刻转写分析
 vmr enroll "我" 清晰自我介绍15秒.m4a           # 注册本地声纹
-vmr install                     # 一键接入 Antigravity / Claude Code / Codex / Cursor
+vmr install                     # 一键接入 Antigravity / Claude 桌面版 / Claude Code / Codex / Cursor
+vmr auth-claude                 # 完成 1 次官方 Claude 浏览器授权（开启 Claude 桌面版自动弹对话）
 vmr uninstall                   # 无损卸载 AI 插件接入
 vmr update                      # 校验 SHA256 安全升级并自动热重启（保留个人数据）
 vmr doctor                      # 一键环境、开机自启与插槽组合体检

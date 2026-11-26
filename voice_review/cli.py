@@ -8,6 +8,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import webbrowser
 
@@ -15,6 +16,7 @@ from voice_review import __version__
 from voice_review.autostart import AutostartManager, run_restart_helper, spawn_restart_helper
 from voice_review.config import (
     VoiceReviewConfig,
+    check_claude_auth_status,
     load_config,
     resolve_claude_binary,
     resolve_codex_binary,
@@ -69,20 +71,58 @@ def _detect_local_asr_tools() -> list[str]:
     return found
 
 
+def _cmd_auth_claude(cfg: VoiceReviewConfig, *, use_console: bool = False) -> int:
+    exe, logged_in, _ = check_claude_auth_status(cfg.claude_bin)
+    if not exe:
+        print("❌ 未检测到本机 Claude 桌面版或 Claude Code，请先安装 Claude 桌面版（https://claude.ai/download）。", file=sys.stderr)
+        return 1
+    if logged_in is True:
+        print(f"✅ 本机官方 Claude 引擎已处于登录状态（{exe}），新录音分析完成后会自动在 Claude 桌面版弹出对话！")
+        return 0
+    mode_flag = "--console" if use_console else "--claudeai"
+    print(f"🔐 正在打开官方 Claude 浏览器授权页（引擎：{exe}）… 请在浏览器中点击允许完成授权。")
+    res = subprocess.run([exe, "auth", "login", mode_flag], check=False)
+    if res.returncode != 0:
+        print(f"❌ 官方 Claude 授权未完成（exit={res.returncode}）。", file=sys.stderr)
+        return res.returncode
+    _, ok_after, detail_after = check_claude_auth_status(cfg.claude_bin)
+    if ok_after is True:
+        print("✅ 官方 Claude 授权已完成！以后新录音转写后会自动分析并在 Claude 桌面版直接打开对话窗口。")
+        return 0
+    print(f"⚠️ 授权命令已返回，但当前登录检测状态：{detail_after}")
+    return 0
+
+
 def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
     ok_combo, combo_msg = validate_provider_combo(cfg.transcriber_provider, cfg.analyzer_auto_provider)
     autostart_st = AutostartManager.default(cfg.vmr_home).status()
     vm_ok, vm_detail = _probe_voice_memos_access(cfg.recordings_dir)
     local_asrs = _detect_local_asr_tools()
     codex_exe = resolve_codex_binary(cfg.codex_bin)
-    claude_exe = resolve_claude_binary(cfg.claude_bin)
+    claude_exe, claude_logged_in, claude_auth_detail = check_claude_auth_status(cfg.claude_bin)
+    if not claude_exe:
+        claude_label = "Claude 桌面版 / CLI（免 Key 分析）"
+        claude_ok = False
+        claude_detail = cfg.claude_bin
+    elif claude_logged_in is False:
+        claude_label = "Claude 桌面版 / CLI（尚未授权登录）"
+        claude_ok = False
+        claude_detail = f"{claude_exe}（{claude_auth_detail}）"
+    elif claude_logged_in is True:
+        claude_label = "Claude 桌面版 / CLI（已登录可自动弹窗）"
+        claude_ok = True
+        claude_detail = claude_exe
+    else:
+        claude_label = "Claude 桌面版 / CLI（免 Key 分析）"
+        claude_ok = True
+        claude_detail = claude_exe
     checks = [
         ("ffmpeg", shutil.which(cfg.ffmpeg_bin) is not None or Path(cfg.ffmpeg_bin).is_file(), cfg.ffmpeg_bin),
         ("ffprobe", shutil.which(cfg.ffprobe_bin) is not None or Path(cfg.ffprobe_bin).is_file(), cfg.ffprobe_bin),
         ("FluidAudio (fluidaudiocli)", cfg.fluidaudio_bin is not None, str(cfg.fluidaudio_bin or "未找到（可设 preprocessor=none）")),
         ("Antigravity agentapi", cfg.agentapi_bin.is_file(), str(cfg.agentapi_bin)),
         ("Codex 桌面版 / CLI（免 Key 分析）", codex_exe is not None, codex_exe or cfg.codex_bin),
-        ("Claude 桌面版 / CLI（免 Key 分析）", claude_exe is not None, claude_exe or cfg.claude_bin),
+        (claude_label, claude_ok, claude_detail),
         ("苹果语音备忘录读取权限", vm_ok, vm_detail),
         ("开机后台自启（launchd）", autostart_st.enabled, ("已开启" + (" · 运行托管中" if autostart_st.loaded else " · 下次开机生效")) if autostart_st.enabled else "未开启（可用 vmr autostart on 开启）"),
         ("插槽组合校验", ok_combo, f"{cfg.transcriber_provider} + {cfg.analyzer_auto_provider} ({combo_msg})"),
@@ -382,10 +422,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--no-analyze", action="store_true", help="仅转写落盘，留待手动或 MCP 分析")
 
     p_inst = sub.add_parser("install", help="一键把 MCP 与通用 Skill 接入本机已安装的 AI 客户端")
-    p_inst.add_argument("--target", action="append", choices=("antigravity", "claude", "codex", "cursor"), help="指定目标客户端（可重复，不填自动探测）")
+    p_inst.add_argument("--target", action="append", choices=("antigravity", "claude", "claude_desktop", "codex", "cursor"), help="指定目标客户端（可重复，不填自动探测）")
 
     p_uninst = sub.add_parser("uninstall", help="从 AI 客户端无损移除 MCP 与 Skill")
-    p_uninst.add_argument("--target", action="append", choices=("antigravity", "claude", "codex", "cursor"))
+    p_uninst.add_argument("--target", action="append", choices=("antigravity", "claude", "claude_desktop", "codex", "cursor"))
+
+    p_auth_c = sub.add_parser("auth-claude", help="完成 1 次官方 Claude 账号浏览器授权（开启 Claude 桌面版后台自动弹窗分析）")
+    p_auth_c.add_argument("--console", action="store_true", help="使用 Anthropic Console API 计费账号而非 Claude 订阅账号")
 
     p_upd = sub.add_parser("update", help="从公开 GitHub Releases 检查并安全更新程序本体")
     p_upd.add_argument("--check", action="store_true", help="仅检查是否有新版本")
@@ -462,6 +505,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_install(args.target, uninstall=False)
     if args.cmd == "uninstall":
         return _cmd_install(args.target, uninstall=True)
+    if args.cmd == "auth-claude":
+        return _cmd_auth_claude(cfg, use_console=bool(args.console))
     if args.cmd == "update":
         return _cmd_update(cfg, args.check, args.archive, args.sha256, force=args.force)
     if args.cmd == "autostart":

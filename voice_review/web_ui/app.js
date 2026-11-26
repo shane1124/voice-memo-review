@@ -365,7 +365,7 @@
     const anShow = {
       "antigravity-agentapi": ["rotation"],
       "codex-cli": ["rotation", "model", "open_desktop_chat"],
-      "claude-cli": ["rotation", "model", "open_desktop_chat"],
+      "claude-cli": ["rotation", "model", "open_desktop_chat", "claude_auth"],
       "none": [],
       "openai-compatible-llm": ["base_url", "model", "api_key"],
       "gemini-llm": ["base_url", "model", "api_key"],
@@ -525,6 +525,15 @@
       showToast(res.message, !res.ok);
     } catch (e) { showToast(e.message, true); }
   });
+
+  if ($("#claudeLoginBtn")) {
+    $("#claudeLoginBtn").addEventListener("click", async () => {
+      try {
+        const res = await apiFetch("/api/v1/providers/claude-login", { method: "POST", body: {} });
+        showToast(res.message, !res.ok);
+      } catch (e) { showToast(e.message, true); }
+    });
+  }
 
   // 规则工作室
   function fillTemplateEditor(tpl) {
