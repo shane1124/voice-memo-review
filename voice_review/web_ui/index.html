@@ -171,18 +171,18 @@
             <div class="settings-card">
               <div class="setting-row">
                 <label class="field">
-                  <span>选择转写提供方</span>
+                  <span>怎么把录音转成文字</span>
                   <select id="cfgTranscriber">
-                    <option value="antigravity-flash">Antigravity Flash（内置零 Key，支持语气标注）</option>
-                    <option value="gemini-api">Gemini API（直连多模态，支持语气标注）</option>
-                    <option value="openai-compatible-asr">OpenAI 兼容 ASR（Whisper / Groq / SiliconFlow / 本地服务）</option>
-                    <option value="command-asr">自定义命令行（整轨 JSON 自动对齐声纹）</option>
+                    <option value="antigravity-flash">Antigravity 免费听写（免 Key，含语气与情绪标注）</option>
+                    <option value="gemini-api">Gemini 在线听写 API（填 Key，含语气与情绪标注）</option>
+                    <option value="openai-compatible-asr">在线语音转写 API（Whisper / 硅基流动 / Groq 等）</option>
+                    <option value="command-asr">本机离线免费转写（Qwen3-ASR / Whisper 本地运行）</option>
                   </select>
                 </label>
               </div>
               <div class="setting-row" data-tr-field="base_url" hidden>
                 <label class="field">
-                  <span>Base URL</span>
+                  <span>接口地址（Base URL，留空使用默认官方地址）</span>
                   <input type="text" id="cfgTrBaseUrl" placeholder="https://api.openai.com/v1" />
                 </label>
               </div>
@@ -200,16 +200,16 @@
               </div>
               <div class="setting-row" data-tr-field="command" hidden>
                 <label class="field">
-                  <span>命令行模板（支持带引号路径与 {audio} {lang} {glossary}）</span>
+                  <span>本机离线转写命令模板（自动回贴声纹与词表）</span>
                   <input type="text" id="cfgTrCommand" placeholder='whisper-cli -m "/path/model.bin" -f {audio} -oj' />
                 </label>
               </div>
               <div class="setting-row" data-tr-field="mode" hidden>
                 <label class="field">
-                  <span>命令调用粒度</span>
+                  <span>转写粒度</span>
                   <select id="cfgTrMode">
-                    <option value="full_audio">整条音频一次调用（推荐，自动回贴声纹）</option>
-                    <option value="segment">按物理切段逐条调用</option>
+                    <option value="full_audio">整条录音一次转写（推荐，自动回贴声纹）</option>
+                    <option value="segment">按发言段落逐段转写</option>
                   </select>
                 </label>
               </div>
@@ -218,21 +218,22 @@
 
           <div class="settings-group">
             <div class="group-head">
-              <div class="group-title">后台自动分析引擎</div>
+              <div class="group-title">自动分析引擎</div>
               <button class="btn text-btn" id="testAnalyzerBtn" type="button">测试连通</button>
             </div>
-            <p class="group-desc">支持免 Key 直接联动本机桌面版 AI（Antigravity / Codex 桌面版 / Claude 桌面版），分析完自动在桌面端弹出对话直接追问。</p>
+            <p class="group-desc">支持免 Key 直接联动本机桌面 AI（Antigravity / Codex / Claude / WorkBuddy），分析完直接打开桌面窗口方便追问。</p>
             <div class="settings-card">
               <div class="setting-row">
                 <label class="field">
-                  <span>选择后台分析提供方</span>
+                  <span>转完文字后交给谁分析</span>
                   <select id="cfgAnalyzer">
-                    <option value="antigravity-agentapi">Antigravity 桌面版后台投递（与 antigravity-flash 一体化免费）</option>
-                    <option value="codex-cli">Codex 桌面版（免 Key，分析后自动打开桌面对话）</option>
-                    <option value="claude-cli">Claude 桌面版（免 Key，分析后自动打开桌面对话）</option>
-                    <option value="openai-compatible-llm">OpenAI 兼容大模型（DeepSeek / OpenAI / Kimi / Ollama）</option>
-                    <option value="gemini-llm">Gemini API 大模型（长上下文直读）</option>
-                    <option value="none">仅自动转写，留待手动或 MCP 对话接手分析</option>
+                    <option value="antigravity-agentapi">Antigravity 桌面版（免 Key，自动推送对话）</option>
+                    <option value="codex-cli">Codex 桌面版（免 Key，分析后自动弹出对话）</option>
+                    <option value="claude-cli">Claude 桌面版（免 Key，分析后自动弹出对话）</option>
+                    <option value="workbuddy-desktop">WorkBuddy 桌面版（免 Key，直接复用账号并打开桌面端）</option>
+                    <option value="openai-compatible-llm">在线大模型 API（DeepSeek / Kimi / 通义 / OpenAI 等）</option>
+                    <option value="gemini-llm">Gemini 在线大模型 API（超长上下文直读）</option>
+                    <option value="none">仅自动转成文字，留待对话时手动分析</option>
                   </select>
                 </label>
               </div>
@@ -249,20 +250,20 @@
               </div>
               <div class="setting-row" data-an-field="base_url" hidden>
                 <label class="field">
-                  <span>Base URL</span>
+                  <span>接口地址（Base URL）</span>
                   <input type="text" id="cfgAnBaseUrl" placeholder="https://api.deepseek.com/v1" />
                 </label>
               </div>
               <div class="setting-row" data-an-field="model" hidden>
                 <label class="field">
-                  <span>模型名称（Codex / Claude 桌面版留空则使用客户端默认模型）</span>
+                  <span>模型名称（桌面 AI 留空则自动使用客户端默认模型）</span>
                   <input type="text" id="cfgAnModel" placeholder="deepseek-chat / gemini-2.5-pro" />
                 </label>
               </div>
               <div class="setting-row" data-an-field="open_desktop_chat" hidden>
                 <label class="switch-pill">
                   <input type="checkbox" id="cfgAnOpenDesktopChat" checked />
-                  <span>分析完成后自动在桌面端（Codex / Claude）弹出带完整分析稿的对话窗口</span>
+                  <span>分析完成后自动在桌面端（Codex / Claude / WorkBuddy）打开带完整分析稿的对话窗口</span>
                 </label>
               </div>
               <div class="setting-row" data-an-field="claude_auth" hidden>
@@ -445,6 +446,7 @@
         <button class="btn text-btn" id="drawerCloseBtn" type="button" aria-label="关闭">✕</button>
       </div>
     </div>
+    <div id="drawerVoiceprintBar" hidden style="padding:12px 24px;border-bottom:1px solid var(--border);background:var(--surface-soft, #f7f4ee);"></div>
     <div class="drawer-body" id="drawerContent"></div>
   </aside>
 

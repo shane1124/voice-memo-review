@@ -18,11 +18,12 @@ from voice_review.config import (
     load_config,
     resolve_antigravity_command,
     resolve_codex_binary,
+    resolve_workbuddy_binary,
     save_config_dict,
     validate_provider_combo,
 )
 from voice_review.daemon import PipelineExecutor, discover_running_daemon
-from voice_review.diarizer import FluidAudioDiarizer, VoiceprintStore
+from voice_review.diarizer import FluidAudioDiarizer, VoiceprintStore, build_voiceprint_enroll_prompt
 from voice_review.rules import RuleStudio
 from voice_review.secrets import SecretStore
 from voice_review.state import StateStore
@@ -118,13 +119,24 @@ def _tool_defs() -> list[dict[str, Any]]:
         },
         {
             "name": "vmr_manage_voiceprints",
-            "description": "查看、注册（从 10~30s 清晰单人样音）或删除本地声纹库成员。",
+            "description": "查看、注册（上传样音或直接从某条录音中一键确认未登记说话人备注，记住后下次自动识别）或删除本地声纹库成员。",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "enroll", "delete"]},
-                    "name": {"type": "string"},
-                    "audio_path": {"type": "string"},
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "enroll", "confirm_from_recording", "delete"],
+                        "description": "list 查看名册 / confirm_from_recording 根据用户口述备注直接从录音保存声纹（推荐，无需额外样音）/ enroll 上传单人样音 / delete 删除",
+                    },
+                    "name": {"type": "string", "description": "action=enroll 或 delete 时的说话人姓名"},
+                    "audio_path": {"type": "string", "description": "action=enroll 时的 10~30 秒清晰单人样音路径"},
+                    "recording_id": {"type": "string", "description": "action=confirm_from_recording 时的录音 ID（留空自动匹配最近一条含未登记说话人的录音）"},
+                    "mappings": {
+                        "type": "object",
+                        "description": "action=confirm_from_recording 时的映射表，例如 {\"SPEAKER_00\": \"我\", \"SPEAKER_01\": \"王总\"}",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "rewrite_docs": {"type": "boolean", "default": True, "description": "保存声纹时是否顺手将该条录音的转录稿与分析稿里的 SPEAKER_XX 替换为备注真名"},
                 },
                 "required": ["action"],
             },
@@ -157,10 +169,10 @@ def _tool_defs() -> list[dict[str, Any]]:
                     "transcriber_model": {"type": "string"},
                     "transcriber_command": {"type": "string"},
                     "transcriber_mode": {"type": "string", "enum": ["full_audio", "segment"]},
-                    "analyzer_auto_provider": {"type": "string", "description": "可选：antigravity-agentapi / codex-cli / claude-cli / openai-compatible-llm / gemini-llm / none"},
+                    "analyzer_auto_provider": {"type": "string", "description": "可选：antigravity-agentapi / codex-cli / claude-cli / workbuddy-desktop / openai-compatible-llm / gemini-llm / none"},
                     "analyzer_base_url": {"type": "string"},
                     "analyzer_model": {"type": "string"},
-                    "open_desktop_chat": {"type": "boolean", "description": "可选（codex-cli / claude-cli 生效）：分析完成后自动在 Codex / Claude 桌面版打开带正文的对话窗口（默认 true）"},
+                    "open_desktop_chat": {"type": "boolean", "description": "可选（Codex / Claude / WorkBuddy 桌面版生效）：分析完成后自动在桌面端打开对话窗口（默认 true）"},
                     "codex_open_desktop_chat": {"type": "boolean", "description": "兼容别名，等价于 open_desktop_chat"},
                     "voice_memos_enabled": {"type": "boolean"},
                     "drop_folder_enabled": {"type": "boolean"},
@@ -247,6 +259,7 @@ class McpStdioServer:
                 "codex_ready": bool(resolve_codex_binary(self.cfg.codex_bin)),
                 "claude_ready": bool(claude_exe),
                 "claude_logged_in": claude_logged_in,
+                "workbuddy_ready": bool(resolve_workbuddy_binary(self.cfg.workbuddy_bin)),
                 "update_available": bool(cached_upd and cached_upd.has_update),
                 "latest_version": cached_upd.latest_version if cached_upd else __version__,
                 "release_notes": cached_upd.release_notes if cached_upd else "",
@@ -336,7 +349,7 @@ class McpStdioServer:
                     if args.get("open_desktop_chat") is not None
                     else args.get("codex_open_desktop_chat")
                 )
-                if raw_open is not None and new_a_prov in ("codex-cli", "claude-cli"):
+                if raw_open is not None and new_a_prov in ("codex-cli", "claude-cli", "workbuddy-desktop"):
                     a_obj["open_desktop_chat"] = bool(raw_open)
                 merged["analyzer"] = a_obj
                 patch_for_daemon["analyzer"] = a_obj
@@ -489,6 +502,14 @@ class McpStdioServer:
             if action == "delete":
                 ok = vp_store.delete(str(args.get("name") or ""))
                 return {"ok": ok}, not ok
+            if action in ("confirm_from_recording", "enroll_from_recording"):
+                rec_id = str(args.get("recording_id") or "").strip() or (self.executor.find_latest_unmatched_recording_id() or "")
+                if not rec_id:
+                    return {"ok": False, "error": "近期没有待确认的未登记说话人声纹记录"}, True
+                mappings = args.get("mappings") if isinstance(args.get("mappings"), dict) else {}
+                rewrite_docs = bool(args.get("rewrite_docs", True))
+                res = self.executor.confirm_unmatched_voiceprints(rec_id, mappings, rewrite_docs=rewrite_docs)
+                return res, (not bool(res.get("ok")))
             if action == "enroll":
                 diarizer = FluidAudioDiarizer(
                     fluidaudio_bin=self.cfg.fluidaudio_bin,
@@ -551,20 +572,28 @@ class McpStdioServer:
         }
         if rec.status in ("awaiting_analysis", "transcribed", "prepared", "done"):
             tpl_id = template_id or rec.template_id or self.cfg.default_template_id
-            extra_sections = self.executor.extensions.run_before_prompt(
-                {
-                    "recording_id": rec.recording_id,
-                    "title": rec.title,
-                    "recorded_at": rec.recorded_at,
-                    "duration_sec": rec.duration_sec,
-                    "speakers_summary": rec.speakers_summary,
-                    "transcript_path": rec.transcript_path,
-                    "analysis_path": rec.analysis_path,
-                    "template_id": tpl_id,
-                    "vmr_home": str(self.cfg.vmr_home),
-                    "output_dir": str(self.cfg.output_dir),
-                }
+            extra_list = list(
+                self.executor.extensions.run_before_prompt(
+                    {
+                        "recording_id": rec.recording_id,
+                        "title": rec.title,
+                        "recorded_at": rec.recorded_at,
+                        "duration_sec": rec.duration_sec,
+                        "speakers_summary": rec.speakers_summary,
+                        "transcript_path": rec.transcript_path,
+                        "analysis_path": rec.analysis_path,
+                        "template_id": tpl_id,
+                        "vmr_home": str(self.cfg.vmr_home),
+                        "output_dir": str(self.cfg.output_dir),
+                    }
+                )
             )
+            unmatched = self.executor.get_unmatched_speakers(rec.recording_id, include_embeddings=False)
+            if unmatched:
+                payload["unmatched_speakers"] = unmatched
+                vp_prompt = build_voiceprint_enroll_prompt(unmatched, recording_id=rec.recording_id)
+                if vp_prompt:
+                    extra_list.append(vp_prompt)
             payload["analysis_prompt"] = self.rules.compose_analysis_prompt(
                 template_id=tpl_id,
                 title=rec.title,
@@ -573,7 +602,7 @@ class McpStdioServer:
                 speakers_summary=rec.speakers_summary,
                 transcript_path=Path(rec.transcript_path) if rec.transcript_path else None,
                 analysis_path=Path(rec.analysis_path) if rec.analysis_path else None,
-                extra_sections=extra_sections,
+                extra_sections=extra_list,
             )
             if rec.workflow_script_path:
                 payload["next_step"] = (

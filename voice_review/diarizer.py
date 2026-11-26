@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -183,6 +184,133 @@ class VoiceprintStore:
     def list_summary(self) -> list[tuple[str, int]]:
         data = self.load()
         return sorted(((k, len(v)) for k, v in data.items()), key=lambda x: x[0])
+
+
+def extract_unmatched_speakers(
+    diar_res: DiarizationResult,
+    *,
+    min_talk_sec: float = 8.0,
+    max_count: int = 8,
+) -> list[dict[str, Any]]:
+    """提取尚未匹配到本机声纹库、且有效发言达到阈值的主要说话人（含 256 维向量供后续零样音建档）。"""
+    items: list[dict[str, Any]] = []
+    for sid, sp in diar_res.speakers.items():
+        if sp.confirmed:
+            continue
+        if sp.talk_sec < min_talk_sec:
+            continue
+        vec = diar_res.raw_embeddings.get(sid)
+        if not vec:
+            continue
+        items.append(
+            {
+                "sid": sid,
+                "talk_sec": round(float(sp.talk_sec), 1),
+                "top1_name": sp.top1_name if sp.top1_score >= DEFAULT_SPLIT_CANDIDATE_THRESHOLD else "",
+                "top1_score": round(float(sp.top1_score), 2) if sp.top1_score >= DEFAULT_SPLIT_CANDIDATE_THRESHOLD else 0.0,
+                "sample_quote": "",
+                "embedding": [round(float(x), 6) for x in vec],
+            }
+        )
+    items.sort(key=lambda x: float(x["talk_sec"]), reverse=True)
+    return items[:max_count]
+
+
+def enrich_unmatched_with_quotes(
+    candidates: list[dict[str, Any]],
+    transcript_text: str,
+) -> list[dict[str, Any]]:
+    """从落盘转录稿中为每位未登记说话人摘取 1 句代表性原话，方便用户一眼辨认是谁。"""
+    if not candidates or not transcript_text:
+        return candidates
+    want = {str(c.get("sid") or "") for c in candidates if c.get("sid")}
+    quotes: dict[str, str] = {}
+    blocks = re.split(r"(?m)^##\s+", transcript_text)
+    for blk in blocks[1:]:
+        lines = [ln.strip() for ln in blk.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            continue
+        head = lines[0]
+        matched_sid = ""
+        for sid in want:
+            if f"**{sid}**" in head or re.search(rf"(?<![A-Za-z0-9_]){re.escape(sid)}(?![A-Za-z0-9_])", head):
+                matched_sid = sid
+                break
+        if not matched_sid:
+            continue
+        body_lines = [ln for ln in lines[1:] if not ln.startswith(">")]
+        if not body_lines:
+            continue
+        sent = re.sub(r"\s+", " ", " ".join(body_lines)).strip()
+        if not sent:
+            continue
+        prev = quotes.get(matched_sid, "")
+        # 优先挑长度在 12~48 字之间的清晰完整原话，避免单字“嗯/对”
+        if not prev or (len(prev) < 12 and len(sent) > len(prev)):
+            quotes[matched_sid] = sent[:46] + ("…" if len(sent) > 46 else "")
+    enriched: list[dict[str, Any]] = []
+    for c in candidates:
+        item = dict(c)
+        sid = str(item.get("sid") or "")
+        if sid in quotes:
+            item["sample_quote"] = quotes[sid]
+        enriched.append(item)
+    return enriched
+
+
+def build_voiceprint_enroll_prompt(
+    candidates: list[dict[str, Any]],
+    *,
+    recording_id: str = "",
+) -> str:
+    """拼装文末声纹建档轻提问指引：让 AI 在分析末尾顺嘴询问用户是否记录未登记说话人备注。"""
+    if not candidates:
+        return ""
+    rows: list[str] = []
+    for c in candidates:
+        sid = str(c.get("sid") or "")
+        sec = float(c.get("talk_sec") or 0.0)
+        dur = f"{sec / 60.0:.1f} 分钟" if sec >= 60 else f"{int(round(sec))} 秒"
+        quote = str(c.get("sample_quote") or "").strip()
+        hint = f"（近似已有声纹：{c['top1_name']} {float(c['top1_score']):.2f}）" if c.get("top1_name") else ""
+        quote_txt = f"，原话示例：「{quote}」" if quote else ""
+        rows.append(f"- `{sid}`（发言约 {dur}{hint}{quote_txt}）")
+    rec_note = f"（当前录音 ID：`{recording_id}`）" if recording_id else ""
+    return (
+        "## 文末附带：说话人声纹建档提问（请务必保留在分析正文最末尾）\n"
+        f"本次录音检测到 **{len(candidates)} 位**尚未登记到本机声纹库的主要说话人{rec_note}：\n"
+        + "\n".join(rows)
+        + "\n\n"
+        "请在完成上面的正式分析后，在回复最末尾用简短友好的中文附一段 **「🎙️ 是否记录说话人声纹？」** 提问：\n"
+        f"1. 告诉用户本次识别到 **{len(candidates)} 位主要说话人** 尚未备注，列出上面每位代号、大致发言时长与原话示例；\n"
+        "2. 明确说明：**记录备注后，声音特征会直接保存在本机声纹库，下一次再录到他们时系统就会自动认出并标出姓名**（不需要记录直接忽略即可）；\n"
+        "3. 告诉用户只需直接回复备注即可（例如：「`SPEAKER_00` 是我，`SPEAKER_01` 是王总」），你收到后会立刻通过 `vmr_manage_voiceprints(action=\"confirm_from_recording\", ...)` 保存声纹并顺手把当前稿件里的代号替换为真名。\n"
+    )
+
+
+def replace_speaker_labels_in_markdown(path: Path, mappings: dict[str, str]) -> bool:
+    """将落盘转录稿/分析稿中的 SPEAKER_XX 代号安全替换为确认后的备注真名。"""
+    if not path or not path.is_file() or not mappings:
+        return False
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    updated = raw
+    for sid, name in mappings.items():
+        clean_sid = str(sid or "").strip()
+        clean_name = str(name or "").strip()
+        if not clean_sid or not clean_name:
+            continue
+        updated = re.sub(
+            rf"(?<![A-Za-z0-9_]){re.escape(clean_sid)}(?![A-Za-z0-9_])",
+            clean_name,
+            updated,
+        )
+    if updated == raw:
+        return False
+    path.write_text(updated, encoding="utf-8")
+    return True
 
 
 def _mean_normalize(vectors: list[list[float]]) -> list[float]:

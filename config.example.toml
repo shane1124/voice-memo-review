@@ -40,8 +40,8 @@ provider = "antigravity-flash"  # antigravity-flash | gemini-api | openai-compat
 
 # 插槽 4：后台自动分析引擎（MCP 对话内始终由当前宿主 AI 分析）
 [analyzer]
-auto_provider = "antigravity-agentapi"  # antigravity-agentapi | codex-cli（Codex 桌面版） | claude-cli（Claude 桌面版） | openai-compatible-llm | gemini-llm | none
-# codex-cli / claude-cli（免 API Key，自动探测桌面 App 内置引擎，分析后默认自动弹出桌面对话）：
+auto_provider = "antigravity-agentapi"  # antigravity-agentapi | codex-cli（Codex 桌面版） | claude-cli（Claude 桌面版） | workbuddy-desktop（WorkBuddy 桌面版） | openai-compatible-llm | gemini-llm | none
+# 桌面版（Codex / Claude / WorkBuddy，免 API Key，自动直连桌面 App 内置本体，分析后默认自动打开桌面对话）：
 # model = ""
 # open_desktop_chat = true
 # openai-compatible-llm 示例（兼容 DeepSeek / OpenAI / Kimi / 通义 / Ollama）：

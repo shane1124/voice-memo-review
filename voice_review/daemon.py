@@ -41,7 +41,14 @@ from voice_review.config import (
     save_config_dict,
     validate_provider_combo,
 )
-from voice_review.diarizer import FluidAudioDiarizer, NoSpeechDetectedError, VoiceprintStore
+from voice_review.diarizer import (
+    FluidAudioDiarizer,
+    NoSpeechDetectedError,
+    VoiceprintStore,
+    build_voiceprint_enroll_prompt,
+    enrich_unmatched_with_quotes,
+    replace_speaker_labels_in_markdown,
+)
 from voice_review.extensions import ExtensionManager
 from voice_review.rules import RuleStudio
 from voice_review.secrets import SecretStore
@@ -242,6 +249,8 @@ class PipelineExecutor:
                 self._emit("job", {"recording_id": rec.recording_id, "status": st, "error": str(exc)})
                 return st
 
+            if prep.unmatched_speakers:
+                self._save_unmatched_speakers(rec.recording_id, prep.unmatched_speakers)
             self.store.update(
                 rec.recording_id,
                 status="transcribing",
@@ -266,6 +275,18 @@ class PipelineExecutor:
                 st = self.store.record_failure(rec.recording_id, str(exc), retry_stage="discovered")
                 self._emit("job", {"recording_id": rec.recording_id, "status": st, "error": str(exc)})
                 return st
+
+            if outcome.transcript_path.is_file():
+                existing_unmatched = self.get_unmatched_speakers(rec.recording_id, include_embeddings=True)
+                if existing_unmatched:
+                    try:
+                        t_txt = outcome.transcript_path.read_text(encoding="utf-8")
+                        self._save_unmatched_speakers(
+                            rec.recording_id,
+                            enrich_unmatched_with_quotes(existing_unmatched, t_txt),
+                        )
+                    except OSError:
+                        pass
 
             self.store.update(
                 rec.recording_id,
@@ -323,7 +344,7 @@ class PipelineExecutor:
         self.store.update(recording_id, status="analyzing", template_id=eff_tpl_id, last_error="")
         self._emit("job", {"recording_id": recording_id, "status": "analyzing"})
 
-        extra_sections = tuple(
+        extra_list = list(
             self.extensions.run_before_prompt(
                 {
                     "recording_id": rec.recording_id,
@@ -339,6 +360,12 @@ class PipelineExecutor:
                 }
             )
         )
+        unmatched = self.get_unmatched_speakers(rec.recording_id, include_embeddings=False)
+        if unmatched:
+            vp_prompt = build_voiceprint_enroll_prompt(unmatched, recording_id=rec.recording_id)
+            if vp_prompt:
+                extra_list.append(vp_prompt)
+        extra_sections = tuple(extra_list)
 
         analyzer = get_analyzer(self.cfg, self.secrets, self.store, self.rules, override_provider=override_provider)
         outcome = analyzer.analyze(
@@ -386,6 +413,102 @@ class PipelineExecutor:
             new_st = self.store.record_failure(recording_id, outcome.error, retry_stage="transcribed" if wf_path is None else "prepared")
             self._emit("job", {"recording_id": recording_id, "status": new_st, "error": outcome.error})
         return outcome
+
+    def _unmatched_meta_key(self, recording_id: str) -> str:
+        return f"unmatched_vp:{recording_id}"
+
+    def _save_unmatched_speakers(self, recording_id: str, items: list[dict[str, Any]]) -> None:
+        self.store.set_meta(self._unmatched_meta_key(recording_id), json.dumps(items, ensure_ascii=False))
+
+    def get_unmatched_speakers(self, recording_id: str, *, include_embeddings: bool = False) -> list[dict[str, Any]]:
+        raw = self.store.get_meta(self._unmatched_meta_key(recording_id))
+        if not raw:
+            return []
+        try:
+            items = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(items, list):
+            return []
+        out: list[dict[str, Any]] = []
+        for it in items:
+            if not isinstance(it, dict) or not it.get("sid"):
+                continue
+            if include_embeddings:
+                out.append(dict(it))
+            else:
+                out.append({k: v for k, v in it.items() if k != "embedding"})
+        return out
+
+    def find_latest_unmatched_recording_id(self) -> str | None:
+        for rec in self.store.list_recent(limit=30):
+            if self.get_unmatched_speakers(rec.recording_id, include_embeddings=False):
+                return rec.recording_id
+        return None
+
+    def confirm_unmatched_voiceprints(
+        self,
+        recording_id: str,
+        mappings: dict[str, str],
+        *,
+        rewrite_docs: bool = True,
+    ) -> dict[str, Any]:
+        """根据用户确认的 {SPEAKER_XX: 备注名} 零样音直接入库声纹，并可选顺手替换该条稿件中的代号。"""
+        clean_map = {str(k).strip(): str(v).strip() for k, v in (mappings or {}).items() if str(k).strip() and str(v).strip()}
+        if not clean_map:
+            return {"ok": False, "error": "未提供有效的说话人备注映射（例如 {\"SPEAKER_00\": \"我\"}）"}
+
+        candidates = self.get_unmatched_speakers(recording_id, include_embeddings=True)
+        by_sid = {str(c.get("sid")): c for c in candidates}
+        vp_store = VoiceprintStore(self.cfg.voiceprints_path)
+
+        saved: list[dict[str, Any]] = []
+        missing: list[str] = []
+        applied_map: dict[str, str] = {}
+        for sid, name in clean_map.items():
+            cand = by_sid.get(sid)
+            vec = cand.get("embedding") if isinstance(cand, dict) else None
+            if not isinstance(vec, list) or not vec:
+                missing.append(sid)
+                continue
+            samples = vp_store.add_embedding(name, [float(x) for x in vec])
+            saved.append({"sid": sid, "name": name, "samples": samples})
+            applied_map[sid] = name
+
+        if not saved:
+            return {
+                "ok": False,
+                "error": f"未在该条录音的待登记声纹中找到对应说话人：{', '.join(missing)}",
+            }
+
+        remaining = [c for c in candidates if str(c.get("sid")) not in applied_map]
+        self._save_unmatched_speakers(recording_id, remaining)
+
+        rewritten: list[str] = []
+        rec = self.store.get(recording_id)
+        if rewrite_docs and rec is not None:
+            for field_name, raw_p in (("transcript", rec.transcript_path), ("analysis", rec.analysis_path)):
+                if raw_p and replace_speaker_labels_in_markdown(Path(raw_p), applied_map):
+                    rewritten.append(field_name)
+            if rec.speakers_summary:
+                new_sum = rec.speakers_summary
+                for sid, name in applied_map.items():
+                    new_sum = re.sub(
+                        rf"(?<![A-Za-z0-9_]){re.escape(sid)}(?![A-Za-z0-9_])",
+                        f"{sid}（已登记：{name}）",
+                        new_sum,
+                    )
+                self.store.update(recording_id, status=rec.status, speakers_summary=new_sum)
+
+        return {
+            "ok": True,
+            "recording_id": recording_id,
+            "saved": saved,
+            "missing": missing,
+            "rewritten": rewritten,
+            "remaining_unmatched": [{k: v for k, v in c.items() if k != "embedding"} for c in remaining],
+            "message": f"已记住 {len(saved)} 位说话人声纹（{'、'.join(s['name'] for s in saved)}），下次录音将自动识别！",
+        }
 
     def submit_single_file(
         self,
@@ -938,13 +1061,15 @@ class VmrDaemon:
 
                 m_content = re.fullmatch(r"/api/v1/jobs/([^/]+)/content", path)
                 if m_content:
-                    rec = daemon.store.get(urllib.parse.unquote(m_content.group(1)))
+                    rec_id = urllib.parse.unquote(m_content.group(1))
+                    rec = daemon.store.get(rec_id)
                     if rec is None:
                         self._send_json(404, {"error": "记录不存在"})
                         return
                     t_text = Path(rec.transcript_path).read_text(encoding="utf-8") if rec.transcript_path and Path(rec.transcript_path).is_file() else ""
                     a_text = Path(rec.analysis_path).read_text(encoding="utf-8") if rec.analysis_path and Path(rec.analysis_path).is_file() else ""
-                    self._send_json(200, {"job": rec.to_dict(), "transcript": t_text, "analysis": a_text})
+                    unmatched = daemon.executor.get_unmatched_speakers(rec_id, include_embeddings=False)
+                    self._send_json(200, {"job": rec.to_dict(), "transcript": t_text, "analysis": a_text, "unmatched_speakers": unmatched})
                     return
 
                 if path == "/api/v1/templates":
@@ -1183,6 +1308,15 @@ class VmrDaemon:
                         override_provider=body.get("provider"),
                     )
                     self._send_json(200 if res.ok else 400, {"ok": res.ok, "status": res.status, "error": res.error})
+                    return
+
+                m_vp_confirm = re.fullmatch(r"/api/v1/jobs/([^/]+)/voiceprints", path)
+                if m_vp_confirm:
+                    rec_id = urllib.parse.unquote(m_vp_confirm.group(1))
+                    mappings = body.get("mappings") if isinstance(body.get("mappings"), dict) else {}
+                    rewrite_docs = bool(body.get("rewrite_docs", True))
+                    res = daemon.executor.confirm_unmatched_voiceprints(rec_id, mappings, rewrite_docs=rewrite_docs)
+                    self._send_json(200 if res.get("ok") else 400, res)
                     return
 
                 m_open_chat = re.fullmatch(r"/api/v1/jobs/([^/]+)/open-chat", path)

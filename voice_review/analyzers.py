@@ -16,7 +16,9 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 
@@ -32,6 +34,7 @@ from voice_review.config import (
     resolve_antigravity_command,
     resolve_claude_binary,
     resolve_codex_binary,
+    resolve_workbuddy_binary,
 )
 from voice_review.rules import RuleStudio
 from voice_review.secrets import SecretStore
@@ -526,6 +529,83 @@ def open_claude_desktop_session(claude_bin: str, session_id: str, work_cwd: Path
         return False
 
 
+def _parse_workbuddy_json_output(stdout_text: str) -> tuple[str, str, bool]:
+    """解析 WorkBuddy 内置引擎 `-p --output-format json` 输出（支持列表或单对象格式），返回 (text, session_id, is_error)。"""
+    raw = (stdout_text or "").strip()
+    if not raw:
+        return "", "", False
+    parsed: Any = None
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return _parse_claude_json_output(raw)
+    if isinstance(parsed, list):
+        res_obj: dict | None = None
+        fallback_text = ""
+        for item in reversed(parsed):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "result":
+                res_obj = item
+                break
+            if not fallback_text and item.get("role") == "assistant":
+                content = item.get("content")
+                if isinstance(content, list):
+                    parts = [str(c.get("text") or "") for c in content if isinstance(c, dict) and c.get("text")]
+                    fallback_text = "\n".join(parts).strip()
+        if res_obj is not None:
+            txt = str(res_obj.get("result") or fallback_text).strip()
+            sid = str(res_obj.get("session_id") or "").strip()
+            return txt, sid, bool(res_obj.get("is_error"))
+        return fallback_text or raw, "", False
+    if isinstance(parsed, dict):
+        return _parse_claude_json_output(raw)
+    return raw, "", False
+
+
+def _build_workbuddy_task_url(
+    output_dir: Path,
+    *,
+    title: str,
+    analysis_path: Path,
+    transcript_path: Path,
+) -> str:
+    prompt = (
+        f"刚完成录音《{title}》的自动分析。\n"
+        f"- 完整分析稿：`{analysis_path.resolve()}`\n"
+        f"- 原始转录稿：`{transcript_path.resolve()}`\n"
+        "请直接读取并展示上述完整分析稿正文（包含末尾的说话人声纹确认提问），方便我直接阅读和继续追问。"
+    )
+    qs = urllib.parse.urlencode(
+        {
+            "action": "start",
+            "cwd": str(output_dir.resolve()),
+            "prompt": prompt,
+        },
+        quote_via=urllib.parse.quote,
+    )
+    return f"workbuddy://task?{qs}"
+
+
+def _open_workbuddy_desktop_url(chat_url: str) -> bool:
+    if sys.platform != "darwin" or not chat_url.startswith("workbuddy://"):
+        return False
+    open_bin = "/usr/bin/open"
+    if not Path(open_bin).is_file():
+        return False
+    try:
+        res = subprocess.run(
+            [open_bin, "-b", "com.workbuddy.workbuddy", chat_url],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return res.returncode == 0
+    except Exception:
+        return False
+
+
 def open_job_desktop_chat(cfg: VoiceReviewConfig, chat_url: str) -> tuple[bool, str]:
     """统一桌面端唤起入口（供控制台一键按钮与自动打开共用）。"""
     url = (chat_url or "").strip()
@@ -538,6 +618,9 @@ def open_job_desktop_chat(cfg: VoiceReviewConfig, chat_url: str) -> tuple[bool, 
         sid = url[len("claude-session://"):].strip()
         ok = open_claude_desktop_session(cfg.claude_bin, sid, cfg.output_dir)
         return (True, "已在 Claude 桌面版打开对话") if ok else (False, "唤起 Claude 桌面版失败，请确认已安装并登录 Claude 桌面版")
+    if url.startswith("workbuddy://"):
+        ok = _open_workbuddy_desktop_url(url)
+        return (True, "已在 WorkBuddy 桌面版打开对话") if ok else (False, "唤起 WorkBuddy 桌面版失败，请确认已安装 WorkBuddy 桌面版")
     return False, f"不支持的桌面对话协议：{url[:40]}"
 
 
@@ -890,6 +973,160 @@ class ClaudeCliAnalyzer(AnalyzerProvider):
         return AnalysisOutcome(ok=True, status="done", analysis_path=req.analysis_path, chat_url=chat_url)
 
 
+class WorkBuddyDesktopAnalyzer(AnalyzerProvider):
+    """免 API Key：直接调用本机 WorkBuddy 桌面版内置引擎（复用已登录账号）自动分析并支持自动打开 WorkBuddy 桌面版。"""
+
+    provider_id = "workbuddy-desktop"
+
+    def __init__(self, cfg: VoiceReviewConfig, rules: RuleStudio, store: StateStore | None = None) -> None:
+        self.cfg = cfg
+        self.rules = rules
+        self.store = store
+        st = cfg.analyzer_settings
+        self.model = str(st.get("model") or "").strip()
+        self.max_chunk_chars = max(10_000, int(st.get("max_chunk_chars", DEFAULT_MAX_CHUNK_CHARS)))
+        self.timeout_sec = max(60, int(st.get("timeout_sec", 420)))
+        self.open_desktop_chat = bool(st.get("open_desktop_chat", True))
+
+    def _run_workbuddy(
+        self,
+        prompt: str,
+        *,
+        work_cwd: Path,
+        ephemeral: bool = False,
+        resume_session_id: str = "",
+    ) -> tuple[str, str]:
+        exe = resolve_workbuddy_binary(self.cfg.workbuddy_bin)
+        if not exe:
+            raise RuntimeError(
+                f"未检测到本机 WorkBuddy 桌面版（{self.cfg.workbuddy_bin}），请先安装并登录 WorkBuddy 桌面版，或切换其他分析引擎。"
+            )
+        work_cwd.mkdir(parents=True, exist_ok=True)
+        cmd = [exe, "-p", "--output-format", "json", "--tools", ""]
+        if self.model:
+            cmd += ["--model", self.model]
+        if ephemeral:
+            cmd.append("--no-session-persistence")
+        elif resume_session_id:
+            cmd += ["--resume", resume_session_id]
+        env = dict(os.environ)
+        wb_home = str((Path.home() / ".workbuddy").resolve())
+        env["CODEBUDDY_CONFIG_DIR"] = wb_home
+        env["WORKBUDDY_CONFIG_DIR"] = wb_home
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=prompt,
+                cwd=str(work_cwd),
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_sec,
+                check=False,
+            )
+            text, sid, is_err = _parse_workbuddy_json_output(proc.stdout)
+            sid = "" if ephemeral else (sid or resume_session_id)
+            if is_err or (proc.returncode != 0 and not text):
+                if resume_session_id and not ephemeral:
+                    return self._run_workbuddy(prompt, work_cwd=work_cwd, ephemeral=False, resume_session_id="")
+                detail = (text or proc.stderr or proc.stdout or "").strip()[-320:]
+                raise RuntimeError(f"WorkBuddy 桌面版分析失败（exit={proc.returncode}）：{detail}")
+            if not text:
+                raise RuntimeError("WorkBuddy 桌面版返回空分析内容")
+            return text, sid
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"WorkBuddy 桌面版分析超时（{self.timeout_sec}s）") from exc
+
+    def analyze(self, req: AnalysisRequest) -> AnalysisOutcome:
+        try:
+            transcript_text = req.transcript_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=f"读取转录稿失败：{exc}")
+        chunks = chunk_text_for_summary(transcript_text, max_chars=self.max_chunk_chars)
+        stamp_short = (req.recorded_at or "")[:16].replace("T", " ")
+        lead = (
+            f"请分析 {stamp_short} 的录音《{req.title}》。"
+            f"后续追问可直接查阅原始转录稿：`{req.transcript_path.resolve()}`。\n\n"
+            "你是一位严谨、客观的中文录音分析专家。"
+            "请直接输出最终完整的 Markdown 分析正文（不要输出执行过程旁白，也不要尝试修改本地文件）。\n\n"
+        )
+
+        bucket, _ = resolve_bucket(self.cfg, req.recorded_at)
+        meta_key = f"workbuddy_{bucket}" if bucket else None
+        prev_sid = (self.store.get_meta(meta_key) or "") if (self.store is not None and meta_key) else ""
+
+        session_id = ""
+        try:
+            if len(chunks) <= 1:
+                prompt = lead + self.rules.compose_analysis_prompt(
+                    template_id=req.template_id or self.cfg.default_template_id,
+                    title=req.title,
+                    recorded_at=req.recorded_at,
+                    duration_sec=req.duration_sec,
+                    speakers_summary=req.speakers_summary,
+                    transcript_text=transcript_text,
+                    extra_sections=req.extra_prompt_sections,
+                )
+                result_md, session_id = self._run_workbuddy(
+                    prompt,
+                    work_cwd=self.cfg.output_dir,
+                    ephemeral=False,
+                    resume_session_id=prev_sid,
+                )
+            else:
+                partials: list[str] = []
+                for idx, chunk in enumerate(chunks, 1):
+                    sub_prompt = (
+                        "你是一位严谨、客观的中文录音分析专家。请直接输出高密度要点，不要多余旁白。\n\n"
+                        + f"这是超长录音《{req.title}》的第 {idx}/{len(chunks)} 段转录稿。"
+                        "请高密度提炼本段核心事实、关键数字、人物承诺、争议分歧与情绪波动（保留原话 `[HH:MM:SS]` 时间戳），"
+                        "不要遗漏关键业务信息：\n\n"
+                        + chunk
+                    )
+                    sub_md, _ = self._run_workbuddy(sub_prompt, work_cwd=self.cfg.output_dir, ephemeral=True)
+                    partials.append(f"### 分段提炼 {idx}/{len(chunks)}\n" + sub_md)
+                final_prompt = lead + self.rules.compose_analysis_prompt(
+                    template_id=req.template_id or self.cfg.default_template_id,
+                    title=req.title,
+                    recorded_at=req.recorded_at,
+                    duration_sec=req.duration_sec,
+                    speakers_summary=req.speakers_summary,
+                    transcript_text="\n\n".join(partials),
+                    extra_sections=req.extra_prompt_sections,
+                )
+                result_md, session_id = self._run_workbuddy(
+                    final_prompt,
+                    work_cwd=self.cfg.output_dir,
+                    ephemeral=False,
+                    resume_session_id=prev_sid,
+                )
+        except Exception as exc:
+            return AnalysisOutcome(ok=False, status="failed", analysis_path=None, error=str(exc))
+
+        req.analysis_path.parent.mkdir(parents=True, exist_ok=True)
+        req.analysis_path.write_text(result_md.rstrip() + "\n", encoding="utf-8")
+
+        if session_id and self.store is not None and meta_key:
+            self.store.set_meta(meta_key, session_id)
+        chat_url = _build_workbuddy_task_url(
+            self.cfg.output_dir,
+            title=req.title,
+            analysis_path=req.analysis_path,
+            transcript_path=req.transcript_path,
+        )
+        _write_codex_webloc(
+            self.cfg.output_dir,
+            recorded_at=req.recorded_at,
+            title=req.title,
+            recording_id=req.recording_id,
+            chat_url=chat_url,
+        )
+        if self.open_desktop_chat:
+            _open_workbuddy_desktop_url(chat_url)
+
+        return AnalysisOutcome(ok=True, status="done", analysis_path=req.analysis_path, chat_url=chat_url)
+
+
 def get_analyzer(
     cfg: VoiceReviewConfig,
     secrets: SecretStore,
@@ -907,6 +1144,8 @@ def get_analyzer(
         return CodexCliAnalyzer(cfg, rules, store=store)
     if pid == "claude-cli":
         return ClaudeCliAnalyzer(cfg, rules, store=store)
+    if pid == "workbuddy-desktop":
+        return WorkBuddyDesktopAnalyzer(cfg, rules, store=store)
     if pid == "openai-compatible-llm":
         return OpenAICompatibleLlmAnalyzer(cfg, secrets, rules)
     if pid == "gemini-llm":
@@ -943,6 +1182,13 @@ def test_analyzer_connection(cfg: VoiceReviewConfig, secrets: SecretStore) -> tu
             )
         suffix = "（官方账号已登录）" if logged_in is True else ""
         return True, f"本机 Claude 桌面版可用（免 Key）{suffix}：{exe}"
+    if pid == "workbuddy-desktop":
+        exe = resolve_workbuddy_binary(cfg.workbuddy_bin)
+        return (
+            (True, f"本机 WorkBuddy 桌面版可用（免 Key，直接复用已登录账号）：{exe}")
+            if exe
+            else (False, f"未检测到本机 WorkBuddy 桌面版：{cfg.workbuddy_bin}")
+        )
     if pid == "openai-compatible-llm":
         base = str(cfg.analyzer_settings.get("base_url") or "https://api.openai.com/v1").rstrip("/")
         key = secrets.get("openai_llm_api_key", env_var="OPENAI_API_KEY")

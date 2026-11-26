@@ -20,7 +20,12 @@ import urllib.request
 import uuid
 
 from voice_review.config import VoiceReviewConfig
-from voice_review.diarizer import DiarizationResult, FluidAudioDiarizer, NoSpeechDetectedError
+from voice_review.diarizer import (
+    DiarizationResult,
+    FluidAudioDiarizer,
+    NoSpeechDetectedError,
+    extract_unmatched_speakers,
+)
 from voice_review.secrets import SecretStore
 from voice_review.segmenter import (
     Segment,
@@ -50,6 +55,7 @@ class PreparedAudioJob:
     speaker_labels: dict[str, str] = field(default_factory=dict)
     asr_context: str = ""
     diarization_result: DiarizationResult | None = None
+    unmatched_speakers: list[dict[str, Any]] = field(default_factory=list)
     duration_sec: float = 0.0
     prep_sec: float = 0.0
     workflow_script_path: Path | None = None
@@ -249,6 +255,7 @@ def prepare_audio_job(
         speaker_labels=speaker_labels,
         asr_context=asr_context.strip(),
         diarization_result=diar_res,
+        unmatched_speakers=extract_unmatched_speakers(diar_res),
         duration_sec=max_end,
         prep_sec=round(time.monotonic() - t0, 2),
     )

@@ -171,18 +171,19 @@
   });
 
   const TR_LABELS = {
-    "antigravity-flash": "Antigravity 听写",
-    "gemini-api": "Gemini 听写",
-    "openai-compatible-asr": "云端 ASR",
+    "antigravity-flash": "Antigravity 免费听写",
+    "gemini-api": "Gemini 在线听写",
+    "openai-compatible-asr": "在线转写 API",
     "command-asr": "本机离线转写",
   };
   const AN_LABELS = {
     "antigravity-agentapi": "Antigravity 桌面版",
     "codex-cli": "Codex 桌面版",
     "claude-cli": "Claude 桌面版",
-    "openai-compatible-llm": "外部大模型 API",
+    "workbuddy-desktop": "WorkBuddy 桌面版",
+    "openai-compatible-llm": "在线大模型 API",
     "gemini-llm": "Gemini API",
-    "none": "仅转写",
+    "none": "仅转成文字",
   };
 
   // 状态加载
@@ -257,11 +258,14 @@
       const canRead = Boolean(j.transcript_path || j.analysis_path);
       const hasCodexChat = Boolean(j.chat_url && j.chat_url.startsWith("codex://"));
       const hasClaudeChat = Boolean(j.chat_url && j.chat_url.startsWith("claude-session://"));
+      const hasWbChat = Boolean(j.chat_url && j.chat_url.startsWith("workbuddy://"));
       const chatBtnHtml = hasCodexChat
         ? `<button class="btn subtle" data-open-chat="${escapeHtml(j.recording_id)}" type="button">在 Codex 打开</button>`
         : (hasClaudeChat
           ? `<button class="btn subtle" data-open-chat="${escapeHtml(j.recording_id)}" type="button">在 Claude 打开</button>`
-          : "");
+          : (hasWbChat
+            ? `<button class="btn subtle" data-open-chat="${escapeHtml(j.recording_id)}" type="button">在 WorkBuddy 打开</button>`
+            : ""));
       return `
         <div class="job-row">
           <div class="job-info">
@@ -383,6 +387,7 @@
       "antigravity-agentapi": ["rotation"],
       "codex-cli": ["rotation", "model", "open_desktop_chat"],
       "claude-cli": ["rotation", "model", "open_desktop_chat", "claude_auth"],
+      "workbuddy-desktop": ["rotation", "model", "open_desktop_chat"],
       "none": [],
       "openai-compatible-llm": ["base_url", "model", "api_key"],
       "gemini-llm": ["base_url", "model", "api_key"],
@@ -407,11 +412,13 @@
       $("#cfgAnModel").placeholder = "留空使用本机 Codex 桌面版默认模型";
     } else if (an === "claude-cli") {
       $("#cfgAnModel").placeholder = "留空使用本机 Claude 桌面版默认模型";
+    } else if (an === "workbuddy-desktop") {
+      $("#cfgAnModel").placeholder = "留空使用 WorkBuddy 默认模型（如 auto / glm-5.1）";
     }
     const warn = $("#comboWarning");
-    if (tr === "antigravity-flash" && ["openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli"].includes(an)) {
+    if (tr === "antigravity-flash" && ["openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli", "workbuddy-desktop"].includes(an)) {
       warn.hidden = false;
-      warn.textContent = "组合不兼容：antigravity-flash 依赖 Antigravity 一体化工作流，不能直接搭配独立分析引擎（Codex / Claude / 外部 API）。若想用 Codex 或 Claude 自动分析，请把转写引擎切为 Gemini API、OpenAI 兼容 ASR 或自定义本地命令行。";
+      warn.textContent = "组合不兼容：Antigravity 免费听写需搭配 Antigravity 桌面版分析；若想用 Codex / Claude / WorkBuddy 或在线大模型 API 分析，请把转写方式切换为「在线语音转写 API」或「本机离线免费转写」。";
     } else {
       warn.hidden = true;
     }
@@ -454,7 +461,7 @@
     if (an === "openai-compatible-llm" || an === "gemini-llm") {
       if ($("#cfgAnBaseUrl").value.trim()) anObj.base_url = $("#cfgAnBaseUrl").value.trim();
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
-    } else if (an === "codex-cli" || an === "claude-cli") {
+    } else if (an === "codex-cli" || an === "claude-cli" || an === "workbuddy-desktop") {
       if ($("#cfgAnModel").value.trim()) anObj.model = $("#cfgAnModel").value.trim();
       anObj.open_desktop_chat = $("#cfgAnOpenDesktopChat").checked;
     }
@@ -696,6 +703,7 @@
       $("#drawerTitle").textContent = "完整 Prompt 预览";
       $("#drawerTabs").hidden = true;
       $("#drawerReanalyzeBtn").hidden = true;
+      if ($("#drawerVoiceprintBar")) $("#drawerVoiceprintBar").hidden = true;
       $("#drawerContent").innerHTML = `<pre>${escapeHtml(res.prompt)}</pre>`;
       openDrawerUI();
     } catch (e) { showToast(e.message, true); }
@@ -754,6 +762,61 @@
     });
   });
 
+  function renderDrawerVoiceprintBar(recId, unmatched) {
+    const bar = $("#drawerVoiceprintBar");
+    if (!bar) return;
+    const list = Array.isArray(unmatched) ? unmatched : [];
+    if (!list.length) {
+      bar.hidden = true;
+      bar.innerHTML = "";
+      return;
+    }
+    bar.hidden = false;
+    bar.innerHTML = `
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px;">
+        🎙️ 识别到 ${list.length} 位未登记的主要说话人，需要记住备注吗？
+        <span style="font-weight:400;color:var(--muted);font-size:12px;">（记住后，下次录音会自动认出并标出姓名）</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${list.map((sp) => {
+          const dur = sp.talk_sec >= 60 ? `${(sp.talk_sec / 60).toFixed(1)} 分钟` : `${Math.round(sp.talk_sec)} 秒`;
+          const quote = sp.sample_quote ? ` · 「${escapeHtml(sp.sample_quote)}」` : "";
+          const hint = sp.top1_name ? `（接近：${escapeHtml(sp.top1_name)}）` : "";
+          return `
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;">
+              <span style="min-width:92px;font-family:monospace;font-weight:600;">${escapeHtml(sp.sid)}</span>
+              <span style="color:var(--muted);flex:1;min-width:160px;">发言约 ${dur}${hint}${quote}</span>
+              <input type="text" data-vp-sid="${escapeHtml(sp.sid)}" placeholder="填备注名（如：我 / 王总）" style="width:155px;padding:5px 8px;border:1px solid var(--border);border-radius:6px;font-size:12.5px;" />
+            </div>
+          `;
+        }).join("")}
+      </div>
+      <div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px;">
+        <button class="btn primary" id="drawerSaveVoiceprintsBtn" type="button" style="padding:5px 12px;font-size:12.5px;">记住声音并回填真名</button>
+      </div>
+    `;
+    $("#drawerSaveVoiceprintsBtn").addEventListener("click", async () => {
+      const mappings = {};
+      bar.querySelectorAll("input[data-vp-sid]").forEach((inp) => {
+        const val = inp.value.trim();
+        if (val) mappings[inp.dataset.vpSid] = val;
+      });
+      if (!Object.keys(mappings).length) {
+        showToast("请先至少填写一位说话人的备注姓名", true);
+        return;
+      }
+      try {
+        const res = await apiFetch(`/api/v1/jobs/${encodeURIComponent(recId)}/voiceprints`, {
+          method: "POST",
+          body: { mappings, rewrite_docs: true },
+        });
+        showToast(res.message || "已记住声纹，下次录音将自动识别");
+        await openJobDrawer(recId);
+        await loadVoiceprints();
+      } catch (e) { showToast(e.message, true); }
+    });
+  }
+
   async function openJobDrawer(recId) {
     const data = await apiFetch(`/api/v1/jobs/${encodeURIComponent(recId)}/content`);
     state.drawerMode = "job";
@@ -764,6 +827,7 @@
     $("#drawerTitle").textContent = data.job.title;
     $("#drawerTabs").hidden = false;
     $("#drawerReanalyzeBtn").hidden = !data.transcript;
+    renderDrawerVoiceprintBar(recId, data.unmatched_speakers || []);
     renderDrawerTab();
     openDrawerUI();
   }

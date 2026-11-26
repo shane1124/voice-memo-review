@@ -21,6 +21,7 @@ from voice_review.config import (
     resolve_antigravity_command,
     resolve_claude_binary,
     resolve_codex_binary,
+    resolve_workbuddy_binary,
     validate_provider_combo,
 )
 from voice_review.daemon import (
@@ -101,6 +102,7 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
     local_asrs = _detect_local_asr_tools()
     agy_cmd = resolve_antigravity_command(str(cfg.agentapi_bin))
     codex_exe = resolve_codex_binary(cfg.codex_bin)
+    wb_exe = resolve_workbuddy_binary(cfg.workbuddy_bin)
     claude_exe, claude_logged_in, claude_auth_detail = check_claude_auth_status(cfg.claude_bin)
     if not claude_exe:
         claude_label = "Claude 桌面版（免 Key 自动弹对话）"
@@ -125,6 +127,7 @@ def _cmd_doctor(cfg: VoiceReviewConfig) -> int:
         ("Antigravity 桌面版", agy_cmd is not None, agy_cmd[0] if agy_cmd else "未检测到 Antigravity 桌面版"),
         ("Codex 桌面版（免 Key 自动弹对话）", codex_exe is not None, codex_exe or "未检测到 Codex 桌面版"),
         (claude_label, claude_ok, claude_detail),
+        ("WorkBuddy 桌面版（免 Key 自动弹对话）", wb_exe is not None, wb_exe or "未检测到 WorkBuddy 桌面版"),
         ("苹果语音备忘录读取权限", vm_ok, vm_detail),
         ("开机后台自启（launchd）", autostart_st.enabled, ("已开启" + (" · 运行托管中" if autostart_st.loaded else " · 下次开机生效")) if autostart_st.enabled else "未开启（可用 vmr autostart on 开启）"),
         ("插槽组合校验", ok_combo, f"{cfg.transcriber_provider} + {cfg.analyzer_auto_provider} ({combo_msg})"),
@@ -424,10 +427,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--no-analyze", action="store_true", help="仅转写落盘，留待手动或 MCP 分析")
 
     p_inst = sub.add_parser("install", help="一键把 MCP 与通用 Skill 接入本机已安装的 AI 客户端")
-    p_inst.add_argument("--target", action="append", choices=("antigravity", "claude", "claude_desktop", "codex", "cursor"), help="指定目标客户端（可重复，不填自动探测）")
+    p_inst.add_argument("--target", action="append", choices=("antigravity", "claude", "claude_desktop", "codex", "workbuddy", "cursor"), help="指定目标客户端（可重复，不填自动探测）")
 
     p_uninst = sub.add_parser("uninstall", help="从 AI 客户端无损移除 MCP 与 Skill")
-    p_uninst.add_argument("--target", action="append", choices=("antigravity", "claude", "claude_desktop", "codex", "cursor"))
+    p_uninst.add_argument("--target", action="append", choices=("antigravity", "claude", "claude_desktop", "codex", "workbuddy", "cursor"))
 
     p_auth_c = sub.add_parser("auth-claude", help="完成 1 次官方 Claude 账号浏览器授权（开启 Claude 桌面版后台自动弹窗分析）")
     p_auth_c.add_argument("--console", action="store_true", help="使用 Anthropic Console API 计费账号而非 Claude 订阅账号")

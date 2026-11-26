@@ -152,6 +152,11 @@ class ClientInstaller:
                 "config": self.home / ".codex" / "config.toml",
                 "skill": self.home / ".codex" / "skills" / PLUGIN_NAME,
             },
+            "workbuddy": {
+                "root": self.home / ".workbuddy",
+                "config": self.home / ".workbuddy" / ".mcp.json",
+                "skill": self.home / ".workbuddy" / "skills" / PLUGIN_NAME,
+            },
             "cursor": {
                 "root": self.home / ".cursor",
                 "config": self.home / ".cursor" / "mcp.json",
@@ -215,6 +220,25 @@ class ClientInstaller:
             config_path=str(codex_cfg),
         )
 
+        # WorkBuddy 桌面版
+        wb_cfg = p["workbuddy"]["config"]
+        wb_inst = False
+        if wb_cfg.is_file():
+            try:
+                wb_inst = PLUGIN_NAME in (json.loads(wb_cfg.read_text(encoding="utf-8")).get("mcpServers") or {})
+            except Exception:
+                wb_inst = False
+        wb_detected = p["workbuddy"]["root"].is_dir() or wb_cfg.is_file()
+        if not wb_detected and self.home == Path.home().resolve():
+            wb_detected = Path("/Applications/WorkBuddy.app").is_dir()
+        out["workbuddy"] = ClientStatus(
+            client="workbuddy",
+            display_name="WorkBuddy 桌面版",
+            detected=wb_detected,
+            installed=wb_inst,
+            config_path=str(wb_cfg),
+        )
+
         # Cursor
         cursor_cfg = p["cursor"]["config"]
         cursor_inst = False
@@ -247,6 +271,8 @@ class ClientInstaller:
                 results[client] = self._install_json_mcp("claude", self._paths()["claude"]["config"], self._paths()["claude"]["skill"])
             elif client == "claude_desktop":
                 results[client] = self._install_json_mcp("claude_desktop", self._paths()["claude_desktop"]["config"], None)
+            elif client == "workbuddy":
+                results[client] = self._install_json_mcp("workbuddy", self._paths()["workbuddy"]["config"], self._paths()["workbuddy"]["skill"])
             elif client == "cursor":
                 results[client] = self._install_json_mcp("cursor", self._paths()["cursor"]["config"], None)
             elif client == "codex":
@@ -254,7 +280,7 @@ class ClientInstaller:
         return results
 
     def uninstall(self, targets: list[str] | None = None) -> dict[str, InstallResult]:
-        all_clients = ("antigravity", "claude", "claude_desktop", "codex", "cursor")
+        all_clients = ("antigravity", "claude", "claude_desktop", "codex", "workbuddy", "cursor")
         selected = [t.strip().lower() for t in targets if t.strip().lower() in all_clients] if targets else list(all_clients)
         results: dict[str, InstallResult] = {}
         for client in selected:
@@ -264,6 +290,8 @@ class ClientInstaller:
                 results[client] = self._uninstall_json_mcp("claude", self._paths()["claude"]["config"], self._paths()["claude"]["skill"])
             elif client == "claude_desktop":
                 results[client] = self._uninstall_json_mcp("claude_desktop", self._paths()["claude_desktop"]["config"], None)
+            elif client == "workbuddy":
+                results[client] = self._uninstall_json_mcp("workbuddy", self._paths()["workbuddy"]["config"], self._paths()["workbuddy"]["skill"])
             elif client == "cursor":
                 results[client] = self._uninstall_json_mcp("cursor", self._paths()["cursor"]["config"], None)
             elif client == "codex":

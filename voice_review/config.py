@@ -27,6 +27,7 @@ VALID_ANALYZERS = (
     "antigravity-agentapi",
     "codex-cli",
     "claude-cli",
+    "workbuddy-desktop",
     "openai-compatible-llm",
     "gemini-llm",
     "none",
@@ -174,6 +175,33 @@ def resolve_claude_binary(raw: str = "") -> str | None:
     return None
 
 
+def resolve_workbuddy_binary(raw: str = "") -> str | None:
+    """定位本机 WorkBuddy 桌面版内置引擎（优先 /Applications/WorkBuddy.app 本体，零外部 CLI 依赖）。"""
+    val = (raw or "").strip()
+    if val and ("/" in val or "\\" in val):
+        p = Path(val).expanduser()
+        return str(p.resolve()) if _is_exec_file(p) else None
+    home = Path.home()
+    desktop_candidates = [
+        Path("/Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy"),
+        home / "Applications/WorkBuddy.app/Contents/Resources/app.asar.unpacked/cli/bin/codebuddy",
+        Path("/Applications/WorkBuddy.app/Contents/Resources/cli/bin/codebuddy"),
+        home / "Applications/WorkBuddy.app/Contents/Resources/cli/bin/codebuddy",
+    ]
+    for cand in desktop_candidates:
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    for bdir in _managed_bin_dirs():
+        cand = bdir / "codebuddy"
+        if _is_exec_file(cand):
+            return str(cand.resolve())
+    for name in ([val] if val else []) + ["codebuddy"]:
+        hit = shutil.which(name)
+        if hit:
+            return hit
+    return None
+
+
 def resolve_antigravity_command(raw: str = "") -> list[str] | None:
     """定位本机 Antigravity 桌面版调用命令（支持桌面 App 内置 language_server 及包装脚本）。"""
     val = (raw or "").strip()
@@ -262,11 +290,11 @@ def validate_provider_combo(transcriber: str, analyzer_auto: str) -> tuple[bool,
         return False, f"不支持的转写引擎：{t}（可选：{', '.join(VALID_TRANSCRIBERS)}）"
     if a not in VALID_ANALYZERS:
         return False, f"不支持的后台分析引擎：{a}（可选：{', '.join(VALID_ANALYZERS)}）"
-    if t == "antigravity-flash" and a in ("openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli"):
+    if t == "antigravity-flash" and a in ("openai-compatible-llm", "gemini-llm", "codex-cli", "claude-cli", "workbuddy-desktop"):
         return (
             False,
-            "转写引擎 antigravity-flash 依赖 Antigravity 一体化工作流，不能直接搭配独立分析引擎（如 Codex / Claude / 外部 API）；"
-            "请将后台分析器设为 antigravity-agentapi，或将转写引擎切换为 gemini-api / openai-compatible-asr / command-asr。",
+            "Antigravity 免费听写（antigravity-flash）依赖 Antigravity 一体化工作流，不能直接搭配其他独立分析引擎（Codex / Claude / WorkBuddy / 在线 API）；"
+            "请把分析引擎设为 Antigravity 桌面版，或将转写方式切为在线转写 API / 本机离线免费转写。",
         )
     return True, "组合有效"
 
@@ -351,6 +379,7 @@ class VoiceReviewConfig:
     ui_port: int = 18765
     codex_bin: str = "codex"
     claude_bin: str = "claude"
+    workbuddy_bin: str = "codebuddy"
 
 
 def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None) -> VoiceReviewConfig:
@@ -454,6 +483,7 @@ def load_config(config_path: Path | None = None, *, vmr_home: Path | None = None
         ui_port=int(ui_raw.get("port", 18765)),
         codex_bin=resolve_codex_binary(str(raw.get("codex_bin", ""))) or _find_bin(str(raw.get("codex_bin", "")), "codex"),
         claude_bin=resolve_claude_binary(str(raw.get("claude_bin", ""))) or _find_bin(str(raw.get("claude_bin", "")), "claude"),
+        workbuddy_bin=resolve_workbuddy_binary(str(raw.get("workbuddy_bin", ""))) or _find_bin(str(raw.get("workbuddy_bin", "")), "codebuddy"),
     )
 
 
@@ -481,6 +511,7 @@ def config_to_dict(cfg: VoiceReviewConfig) -> dict[str, Any]:
         "agentapi_bin": str(cfg.agentapi_bin),
         "codex_bin": cfg.codex_bin,
         "claude_bin": cfg.claude_bin,
+        "workbuddy_bin": cfg.workbuddy_bin,
         "sources": {
             "voice_memos_enabled": cfg.voice_memos_enabled,
             "recordings_dir": str(cfg.recordings_dir),
